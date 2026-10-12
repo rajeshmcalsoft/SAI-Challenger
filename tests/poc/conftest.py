@@ -54,22 +54,27 @@ def mld_filter(request):
     yield
     l2.remove_mld_filter()
 
-
 @pytest.fixture
 def pcap_capture(request, npu):
-    """Save frames seen on veth1/veth2 to reports/<test>.pcap (saivpp with --traffic only)."""
+    """Sniff the dataplane veths during a test; save reports/<test>.pcap."""
     if not npu.run_traffic:
         yield None
         return
-    from scapy.all import AsyncSniffer, wrpcap  # only the saivpp container needs this
+    # imported here so saivs runs never need scapy
+    from scapy.all import AsyncSniffer, wrpcap
+
     REPORTS.mkdir(exist_ok=True)
-    path = REPORTS / (re.sub(r"[^A-Za-z0-9_.-]", "_", request.node.name) + ".pcap")
-    sniffer = AsyncSniffer(iface=PCAP_IFACES)
+    sniffer = AsyncSniffer(iface=PCAP_IFACES, store=True)
     sniffer.start()
-    time.sleep(1)  # let the sniffer attach before the test sends
+    time.sleep(1)  # let the sniffer attach before the test sends anything
     try:
-        yield path
+        yield sniffer
     finally:
+        time.sleep(0.5)  # catch late packets
         if sniffer.running:
             sniffer.stop()
-        wrpcap(str(path), sniffer.results or [])
+        pkts = sniffer.results or []
+        name = re.sub(r"[^A-Za-z0-9_.-]", "_", request.node.name)
+        path = REPORTS / f"{name}.pcap"
+        wrpcap(str(path), pkts)
+        print(f"pcap written: {path} ({len(pkts)} packets)")
