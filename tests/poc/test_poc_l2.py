@@ -1,4 +1,4 @@
-"""Track A, Level 1 (control plane): VLAN read-back tests. Run on saivs and saivpp."""
+"""Track A, Level 1 (control plane): VLAN read-back tests."""
 import pytest
 
 from .lib import l2
@@ -15,13 +15,14 @@ def test_poc_l2_vlan_readback(npu):
         assert data.value() == VLAN_ID
 
 
-def test_poc_l2_vlan_member_readback(npu):
+def test_poc_l2_vlan_member_readback(npu, poc_ports):
     """A tagged member reads back SAI_VLAN_TAGGING_MODE_TAGGED on the right bridge port."""
+    (p,) = poc_ports(1)
     with l2.vlan(npu, VLAN_ID) as vlan_oid, \
-            l2.vlan_member(npu, vlan_oid, 0, l2.TAGGED) as member_oid:
+            l2.vlan_member(npu, vlan_oid, p, l2.TAGGED) as member_oid:
         mode = npu.get(member_oid, ["SAI_VLAN_MEMBER_ATTR_VLAN_TAGGING_MODE"]).value()
         assert mode == l2.TAGGED
         bp_oid = npu.get(member_oid, ["SAI_VLAN_MEMBER_ATTR_BRIDGE_PORT_ID"]).oid()
-        assert bp_oid == npu.dot1q_bp_oids[0]
+        assert bp_oid == npu.dot1q_bp_oids[p]
         members = npu.get(vlan_oid, ["SAI_VLAN_ATTR_MEMBER_LIST"]).to_list()
         assert member_oid in members

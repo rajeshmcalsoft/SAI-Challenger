@@ -1,0 +1,9 @@
+{
+  "name": "saivs",
+  "testbed": "saivs_standalone",
+  "exec_args": [],
+  "lock": "saivs",
+  "ports": [0, 1, 2, 3, 4, 5, 6, 7],
+  "traffic_filters": [],
+  "expected_gaps": {}
+}
