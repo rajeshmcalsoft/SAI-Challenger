@@ -13,11 +13,11 @@ fail=0
 run() {  # run <label> <run_poc.sh args...>
   local label=$1; shift
   echo "== $label ==" | tee -a "$OUT"
-  "$HERE/run_poc.sh" "$@" 2>&1 | tail -n 15 | tee -a "$OUT"
+  "$HERE/run_poc.sh" "$@" 2>&1 | tail -n 40 | tee -a "$OUT"
   [ "${PIPESTATUS[0]}" -eq 0 ] || fail=1
 }
-run "saivs run 1" saivs "$T"
-run "saivs run 2" saivs "$T"
+run "saivs run 1" saivs "$T" -rxX
+run "saivs run 2" saivs "$T" -rxX
 run "upstream test_l2_basic.py after (saivs)" saivs test_l2_basic.py -k "not lag and not mtu and not bulk"
 echo "pre_pr: $([ $fail -eq 0 ] && echo PASS || echo FAIL)  -> $OUT"
 exit $fail
