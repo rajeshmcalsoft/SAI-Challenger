@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # usage: pre_pr.sh poc_<you>/test_poc_l2.py
-# Runs the file twice on saivs, then upstream test_l2_basic.py on saivs, and writes
-# the tail of each run to ~/pr_paste_<stamp>.txt for the PR description.
+# Validates the target profiles, runs the file twice on saivs, then upstream
+# test_l2_basic.py on saivs, and writes the tail of each run to ~/pr_paste_<stamp>.txt.
 set -u
 T=${1:?usage: pre_pr.sh poc_<you>/test_poc_l2.py}
 HERE=$(cd "$(dirname "$0")" && pwd)
 OUT=~/pr_paste_$(date +%m%d-%H%M%S).txt
+for f in "$HERE"/../../tests/poc/targets/*.json; do
+  python3 -m json.tool "$f" > /dev/null || { echo "invalid JSON: $f"; exit 1; }
+done
 fail=0
 run() {  # run <label> <run_poc.sh args...>
   local label=$1; shift
