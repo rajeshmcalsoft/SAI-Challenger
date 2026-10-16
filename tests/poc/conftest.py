@@ -18,7 +18,7 @@ HERE = Path(__file__).resolve().parent
 TARGETS = HERE / "targets"
 REPORTS = HERE / "reports"
 DEFAULT_PORTS = list(range(8))
-PCAP_IFACES = ["veth1", "veth2"]  # PTF ports 0 and 1 (see testbeds/saivpp_standalone.json)
+PCAP_IFACES = ["veth1", "veth2", "veth3"]  # PTF ports 0-2 (see the testbed file)
 PROFILE = pytest.StashKey[dict]()
 
 MARKERS = (
@@ -26,7 +26,7 @@ MARKERS = (
     ("l3", "Track B: L3 unicast routing"),
     ("acl", "Track C: ACL"),
     ("counters", "Track C: port counters"),
-    ("traffic", "needs --traffic and a forwarding target (saivpp)"),
+    ("traffic", "needs --traffic and a forwarding target"),
     ("negative", "bad input must be rejected"),
 )
 
@@ -95,6 +95,13 @@ def on_prev_test_failure(prev_test_failed, npu):
         npu.reset()
 
 
+@pytest.fixture(autouse=True)
+def traffic_gate(request, npu):
+    """Tests marked 'traffic' are skipped unless the run sends traffic on a forwarding target."""
+    if request.node.get_closest_marker("traffic") and not npu.run_traffic:
+        pytest.skip("needs --traffic on a forwarding target")
+
+
 @pytest.fixture(scope="session", autouse=True)
 def mld_filter(request):
     if not _mld_wanted(request.config):
@@ -126,7 +133,7 @@ def pcap_capture(request, npu):
     if not npu.run_traffic:
         yield None
         return
-    # imported here so saivs runs never need scapy
+    # imported here so runs without traffic never need scapy
     from scapy.all import AsyncSniffer, wrpcap
 
     REPORTS.mkdir(exist_ok=True)
