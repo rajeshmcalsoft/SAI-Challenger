@@ -7,6 +7,8 @@ from upstream: tests/ut/test_vrf_ut.py (VRF), tests/test_vrf.py::test_rif_create
 (port RIF) and tests/native/test_route.py::test_route_update (neighbor, next hop).
 """
 
+from types import SimpleNamespace
+
 import pytest
 from saichallenger.common.sai_data import SaiObjType
 
@@ -83,21 +85,30 @@ def port_rif(npu, vrf, poc_ports):
 @pytest.fixture
 def neighbor_nexthop(npu):
     """
-    Factory: neighbor_nexthop(rif_oid, ip, mac) creates a neighbor entry and then
-    a next hop for `ip` on the given RIF, and returns (neighbor_key, nexthop_oid).
-    It can be called more than once per test (e.g. two next hops on one RIF).
+    Helper object for neighbors and next hops on a RIF:
+
+      neighbor_nexthop.create(rif_oid, ip, mac) -> (neighbor_key, nexthop_oid)
+          Creates a neighbor entry, then a next hop for `ip` on the RIF.
+          Can be called more than once per test (e.g. two next hops on one RIF).
+      neighbor_nexthop.remove(handle, do_assert=True) -> status
+          Removes a neighbor key or next hop OID that was created here. The
+          handle is forgotten only if the removal succeeded, so a rejected
+          removal (do_assert=False, e.g. SAI_STATUS_OBJECT_IN_USE) is still
+          cleaned up at teardown.
 
     Order follows upstream test_route_update: neighbor first, then next hop.
-    Teardown removes everything created through the factory in reverse order
-    (last next hop first, first neighbor last), even if the test fails part way.
+    Teardown removes whatever is left in reverse order of creation, even if the
+    test fails part way.
 
     Objects that depend on these (routes, next hop group members) must be removed
     by the test, or by a fixture that depends on this one, before teardown runs;
-    otherwise the next hop removal is rejected as in use.
+    otherwise the next hop removal is rejected as in use. The RIF fixture must be
+    set up before this one (list it first in the test arguments) so that it is
+    torn down after this one.
     """
     created = []  # handles in creation order: neighbor keys and next hop OIDs
 
-    def make(rif_oid, ip, mac):
+    def create(rif_oid, ip, mac):
         neighbor_key = npu._neighbor_entry_key(rif_oid, ip)
         npu.create(neighbor_key, ["SAI_NEIGHBOR_ENTRY_ATTR_DST_MAC_ADDRESS", mac])
         created.append(neighbor_key)
@@ -113,8 +124,14 @@ def neighbor_nexthop(npu):
         created.append(nexthop_oid)
         return neighbor_key, nexthop_oid
 
+    def remove(handle, do_assert=True):
+        status = npu.remove(handle, do_assert)
+        if status == "SAI_STATUS_SUCCESS":
+            created.remove(handle)
+        return status
+
     try:
-        yield make
+        yield SimpleNamespace(create=create, remove=remove)
     finally:
         # Try every removal even if one fails, then report the first failure
         first_error = None

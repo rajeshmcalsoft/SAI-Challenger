@@ -3,9 +3,18 @@
 
 import pytest
 
-from .lib.l3 import port_rif, vrf  # noqa: F401  (vrf, port_rif are pytest fixtures)
+from .lib.l3 import neighbor_nexthop, port_rif, vrf  # noqa: F401  (pytest fixtures)
 
 pytestmark = pytest.mark.l3
+
+# Values taken from upstream tests/native/test_route.py and tests/test_dc_t1.py
+NEIGHBOR_IP = "10.10.10.2"
+NEIGHBOR_MAC = "00:11:22:33:44:55"
+ROUTE_V4 = "100.0.0.0/8"
+# SUGGESTION (not from the plans or upstream): IPv6 documentation prefix (RFC 3849)
+ROUTE_V6 = "2001:db8::/32"
+PACKET_ACTION = "SAI_ROUTE_ENTRY_ATTR_PACKET_ACTION"
+FORWARD = "SAI_PACKET_ACTION_FORWARD"
 
 
 def test_poc_l3_vrf_default_admin_state(npu, vrf):
@@ -39,3 +48,42 @@ def test_poc_l3_port_rif_port_restored(npu, poc_ports):
     port_idx = poc_ports(1)[0]
     bp_oid = npu.dot1q_bp_oids[port_idx]
     assert npu.get_vlan_member(npu.default_vlan_oid, bp_oid) is not None
+
+
+def test_poc_l3_neighbor_nexthop_create_remove(npu, port_rif, neighbor_nexthop):
+    # port_rif is listed before neighbor_nexthop so the RIF is torn down last.
+    neighbor_key, nexthop_oid = neighbor_nexthop.create(port_rif, NEIGHBOR_IP, NEIGHBOR_MAC)
+
+    # Keys are read with the two-element form, as in upstream test_route.py
+    mac = npu.get(neighbor_key, ["SAI_NEIGHBOR_ENTRY_ATTR_DST_MAC_ADDRESS", "00:00:00:00:00:00"]).value()
+    assert mac.lower() == NEIGHBOR_MAC
+
+    assert npu.get(nexthop_oid, ["SAI_NEXT_HOP_ATTR_TYPE"]).value() == "SAI_NEXT_HOP_TYPE_IP"
+    assert npu.get(nexthop_oid, ["SAI_NEXT_HOP_ATTR_ROUTER_INTERFACE_ID"]).oid() == port_rif
+
+    # The next hop uses the neighbor, so it is removed first
+    neighbor_nexthop.remove(nexthop_oid)
+    neighbor_nexthop.remove(neighbor_key)
+
+
+def _route_create_remove(npu, vrf, prefix):
+    # Same call pattern as upstream test_dc_t1.py::test_basic_route: a route whose
+    # next hop is the CPU port, with an explicit packet action.
+    cpu_port_oid = npu.get(npu.switch_oid, ["SAI_SWITCH_ATTR_CPU_PORT", "oid:0x0"]).oid()
+    npu.create_route(prefix, vrf, cpu_port_oid, [PACKET_ACTION, FORWARD])
+    try:
+        route_key = npu._route_entry_key(vrf, prefix)
+        action = npu.get(route_key, [PACKET_ACTION, ""]).value()
+        assert action == FORWARD
+        next_hop = npu.get(route_key, ["SAI_ROUTE_ENTRY_ATTR_NEXT_HOP_ID", "oid:0x0"]).oid()
+        assert next_hop == cpu_port_oid
+    finally:
+        npu.remove_route(prefix, vrf)
+
+
+def test_poc_l3_route_ipv4_create_remove(npu, vrf):
+    _route_create_remove(npu, vrf, ROUTE_V4)
+
+
+def test_poc_l3_route_ipv6_create_remove(npu, vrf):
+    _route_create_remove(npu, vrf, ROUTE_V6)
