@@ -13,6 +13,19 @@ import pytest
 from saichallenger.common.sai_data import SaiObjType
 
 
+def _remove_all(npu, handles):
+    """Remove handles in reverse order; try all, then raise the first failure."""
+    first_error = None
+    for handle in reversed(handles):
+        try:
+            npu.remove(handle)
+        except Exception as err:  # noqa: BLE001
+            if first_error is None:
+                first_error = err
+    if first_error is not None:
+        raise first_error
+
+
 @pytest.fixture
 def vrf(npu):
     """Create a non-default VRF, yield its OID, remove it afterwards."""
@@ -133,13 +146,52 @@ def neighbor_nexthop(npu):
     try:
         yield SimpleNamespace(create=create, remove=remove)
     finally:
-        # Try every removal even if one fails, then report the first failure
-        first_error = None
-        for handle in reversed(created):
-            try:
-                npu.remove(handle)
-            except Exception as err:  # noqa: BLE001
-                if first_error is None:
-                    first_error = err
-        if first_error is not None:
-            raise first_error
+        _remove_all(npu, created)
+
+
+@pytest.fixture
+def next_hop_group(npu, neighbor_nexthop):
+    """
+    Helper object for next hop groups:
+
+      next_hop_group.create() -> group_oid
+      next_hop_group.add_member(group_oid, nexthop_oid) -> member_oid
+      next_hop_group.remove(handle, do_assert=True) -> status
+
+    Teardown removes whatever is left in reverse order (members before their
+    group). It depends on `neighbor_nexthop` only so that pytest tears this
+    fixture down first: members reference next hops, so they must go first.
+
+    The group type is the one used by upstream tests/api/test_next_hop_group.py.
+    """
+    created = []  # group and member OIDs in creation order
+
+    def create():
+        group_oid = npu.create(
+            SaiObjType.NEXT_HOP_GROUP,
+            ["SAI_NEXT_HOP_GROUP_ATTR_TYPE", "SAI_NEXT_HOP_GROUP_TYPE_DYNAMIC_UNORDERED_ECMP"],
+        )
+        created.append(group_oid)
+        return group_oid
+
+    def add_member(group_oid, nexthop_oid):
+        member_oid = npu.create(
+            SaiObjType.NEXT_HOP_GROUP_MEMBER,
+            [
+                "SAI_NEXT_HOP_GROUP_MEMBER_ATTR_NEXT_HOP_GROUP_ID", group_oid,
+                "SAI_NEXT_HOP_GROUP_MEMBER_ATTR_NEXT_HOP_ID", nexthop_oid,
+            ],
+        )
+        created.append(member_oid)
+        return member_oid
+
+    def remove(handle, do_assert=True):
+        status = npu.remove(handle, do_assert)
+        if status == "SAI_STATUS_SUCCESS":
+            created.remove(handle)
+        return status
+
+    try:
+        yield SimpleNamespace(create=create, add_member=add_member, remove=remove)
+    finally:
+        _remove_all(npu, created)
