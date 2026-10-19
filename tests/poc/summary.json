@@ -1,0 +1,750 @@
+{
+  "columns": [
+    {
+      "label": "saivs#1",
+      "target": "saivs",
+      "report": "saivs-1019-042627.xml",
+      "totals": {
+        "passed": 16,
+        "failed": 0,
+        "xfail": 1,
+        "xpass": 0,
+        "skipped": 7
+      }
+    },
+    {
+      "label": "saivs#2",
+      "target": "saivs",
+      "report": "saivs-1019-042654.xml",
+      "totals": {
+        "passed": 16,
+        "failed": 0,
+        "xfail": 1,
+        "xpass": 0,
+        "skipped": 7
+      }
+    },
+    {
+      "label": "saivpp#1",
+      "target": "saivpp",
+      "report": "saivpp-1019-042714.xml",
+      "totals": {
+        "passed": 21,
+        "failed": 2,
+        "xfail": 1,
+        "xpass": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "label": "saivpp#2",
+      "target": "saivpp",
+      "report": "saivpp-1019-042740.xml",
+      "totals": {
+        "passed": 21,
+        "failed": 2,
+        "xfail": 1,
+        "xpass": 0,
+        "skipped": 0
+      }
+    }
+  ],
+  "tests": [
+    {
+      "file": "test_poc_acl.py",
+      "test": "test_poc_acl_table_create_remove",
+      "results": {
+        "saivs#1": {
+          "outcome": "passed",
+          "time": 22.889,
+          "message": ""
+        },
+        "saivs#2": {
+          "outcome": "passed",
+          "time": 16.348,
+          "message": ""
+        },
+        "saivpp#1": {
+          "outcome": "passed",
+          "time": 11.703,
+          "message": ""
+        },
+        "saivpp#2": {
+          "outcome": "passed",
+          "time": 9.966,
+          "message": ""
+        }
+      }
+    },
+    {
+      "file": "test_poc_acl.py",
+      "test": "test_poc_acl_table_readback",
+      "results": {
+        "saivs#1": {
+          "outcome": "passed",
+          "time": 0.038,
+          "message": ""
+        },
+        "saivs#2": {
+          "outcome": "passed",
+          "time": 0.038,
+          "message": ""
+        },
+        "saivpp#1": {
+          "outcome": "passed",
+          "time": 0.037,
+          "message": ""
+        },
+        "saivpp#2": {
+          "outcome": "passed",
+          "time": 0.037,
+          "message": ""
+        }
+      }
+    },
+    {
+      "file": "test_poc_acl.py",
+      "test": "test_poc_acl_entry_drop_create_remove",
+      "results": {
+        "saivs#1": {
+          "outcome": "passed",
+          "time": 0.05,
+          "message": ""
+        },
+        "saivs#2": {
+          "outcome": "passed",
+          "time": 0.05,
+          "message": ""
+        },
+        "saivpp#1": {
+          "outcome": "passed",
+          "time": 0.05,
+          "message": ""
+        },
+        "saivpp#2": {
+          "outcome": "passed",
+          "time": 0.049,
+          "message": ""
+        }
+      }
+    },
+    {
+      "file": "test_poc_acl.py",
+      "test": "test_poc_acl_entry_priority_readback",
+      "results": {
+        "saivs#1": {
+          "outcome": "passed",
+          "time": 0.062,
+          "message": ""
+        },
+        "saivs#2": {
+          "outcome": "passed",
+          "time": 0.062,
+          "message": ""
+        },
+        "saivpp#1": {
+          "outcome": "passed",
+          "time": 0.065,
+          "message": ""
+        },
+        "saivpp#2": {
+          "outcome": "passed",
+          "time": 0.062,
+          "message": ""
+        }
+      }
+    },
+    {
+      "file": "test_poc_acl.py",
+      "test": "test_poc_acl_bind_port",
+      "results": {
+        "saivs#1": {
+          "outcome": "passed",
+          "time": 0.075,
+          "message": ""
+        },
+        "saivs#2": {
+          "outcome": "passed",
+          "time": 0.074,
+          "message": ""
+        },
+        "saivpp#1": {
+          "outcome": "passed",
+          "time": 0.074,
+          "message": ""
+        },
+        "saivpp#2": {
+          "outcome": "passed",
+          "time": 0.074,
+          "message": ""
+        }
+      }
+    },
+    {
+      "file": "test_poc_acl.py",
+      "test": "test_poc_acl_match_src_ipv6",
+      "results": {
+        "saivs#1": {
+          "outcome": "passed",
+          "time": 0.05,
+          "message": ""
+        },
+        "saivs#2": {
+          "outcome": "passed",
+          "time": 0.05,
+          "message": ""
+        },
+        "saivpp#1": {
+          "outcome": "failed",
+          "time": 0.038,
+          "message": "AssertionError: SRC_IPV6 entry create failed: SAI_STATUS_FAILURE\nassert 'SAI_STATUS_FAILURE' == 'SAI_STATUS_SUCCESS'\n  \n  - SAI_STATUS_SUCCESS\n  + SAI_STATUS_FAILURE"
+        },
+        "saivpp#2": {
+          "outcome": "failed",
+          "time": 0.038,
+          "message": "AssertionError: SRC_IPV6 entry create failed: SAI_STATUS_FAILURE\nassert 'SAI_STATUS_FAILURE' == 'SAI_STATUS_SUCCESS'\n  \n  - SAI_STATUS_SUCCESS\n  + SAI_STATUS_FAILURE"
+        }
+      }
+    },
+    {
+      "file": "test_poc_acl.py",
+      "test": "test_poc_acl_match_dst_mac",
+      "results": {
+        "saivs#1": {
+          "outcome": "passed",
+          "time": 0.05,
+          "message": ""
+        },
+        "saivs#2": {
+          "outcome": "passed",
+          "time": 0.05,
+          "message": ""
+        },
+        "saivpp#1": {
+          "outcome": "passed",
+          "time": 7.596,
+          "message": ""
+        },
+        "saivpp#2": {
+          "outcome": "passed",
+          "time": 11.832,
+          "message": ""
+        }
+      }
+    },
+    {
+      "file": "test_poc_acl.py",
+      "test": "test_poc_acl_table_group_create_remove",
+      "results": {
+        "saivs#1": {
+          "outcome": "passed",
+          "time": 0.074,
+          "message": ""
+        },
+        "saivs#2": {
+          "outcome": "passed",
+          "time": 0.075,
+          "message": ""
+        },
+        "saivpp#1": {
+          "outcome": "passed",
+          "time": 0.074,
+          "message": ""
+        },
+        "saivpp#2": {
+          "outcome": "passed",
+          "time": 0.074,
+          "message": ""
+        }
+      }
+    },
+    {
+      "file": "test_poc_acl.py",
+      "test": "test_poc_acl_entry_unknown_field_rejected",
+      "results": {
+        "saivs#1": {
+          "outcome": "xfail",
+          "time": 0.05,
+          "message": "target accepted an ACL entry with a field its table lacks"
+        },
+        "saivs#2": {
+          "outcome": "xfail",
+          "time": 0.05,
+          "message": "target accepted an ACL entry with a field its table lacks"
+        },
+        "saivpp#1": {
+          "outcome": "xfail",
+          "time": 0.05,
+          "message": "target accepted an ACL entry with a field its table lacks"
+        },
+        "saivpp#2": {
+          "outcome": "xfail",
+          "time": 0.05,
+          "message": "target accepted an ACL entry with a field its table lacks"
+        }
+      }
+    },
+    {
+      "file": "test_poc_acl.py",
+      "test": "TestPocAclDrop::test_poc_acl_drop_01_l2_configured",
+      "results": {
+        "saivs#1": {
+          "outcome": "skipped",
+          "time": 0.001,
+          "message": "traffic mode is off (npu.run_traffic is False): no dataplane ports"
+        },
+        "saivs#2": {
+          "outcome": "skipped",
+          "time": 0.001,
+          "message": "traffic mode is off (npu.run_traffic is False): no dataplane ports"
+        },
+        "saivpp#1": {
+          "outcome": "passed",
+          "time": 0.184,
+          "message": ""
+        },
+        "saivpp#2": {
+          "outcome": "passed",
+          "time": 0.184,
+          "message": ""
+        }
+      }
+    },
+    {
+      "file": "test_poc_acl.py",
+      "test": "TestPocAclDrop::test_poc_acl_drop_02_baseline_both_ports_forward",
+      "results": {
+        "saivs#1": {
+          "outcome": "skipped",
+          "time": 0.001,
+          "message": "needs step(s) that did not pass: l2"
+        },
+        "saivs#2": {
+          "outcome": "skipped",
+          "time": 0.001,
+          "message": "needs step(s) that did not pass: l2"
+        },
+        "saivpp#1": {
+          "outcome": "passed",
+          "time": 0.011,
+          "message": ""
+        },
+        "saivpp#2": {
+          "outcome": "passed",
+          "time": 0.01,
+          "message": ""
+        }
+      }
+    },
+    {
+      "file": "test_poc_acl.py",
+      "test": "TestPocAclDrop::test_poc_acl_drop_03_table_created",
+      "results": {
+        "saivs#1": {
+          "outcome": "passed",
+          "time": 0.013,
+          "message": ""
+        },
+        "saivs#2": {
+          "outcome": "passed",
+          "time": 0.014,
+          "message": ""
+        },
+        "saivpp#1": {
+          "outcome": "passed",
+          "time": 0.014,
+          "message": ""
+        },
+        "saivpp#2": {
+          "outcome": "passed",
+          "time": 0.013,
+          "message": ""
+        }
+      }
+    },
+    {
+      "file": "test_poc_acl.py",
+      "test": "TestPocAclDrop::test_poc_acl_drop_04_entries_created",
+      "results": {
+        "saivs#1": {
+          "outcome": "passed",
+          "time": 0.025,
+          "message": ""
+        },
+        "saivs#2": {
+          "outcome": "passed",
+          "time": 0.025,
+          "message": ""
+        },
+        "saivpp#1": {
+          "outcome": "passed",
+          "time": 0.026,
+          "message": ""
+        },
+        "saivpp#2": {
+          "outcome": "passed",
+          "time": 0.025,
+          "message": ""
+        }
+      }
+    },
+    {
+      "file": "test_poc_acl.py",
+      "test": "TestPocAclDrop::test_poc_acl_drop_05_bound_to_ingress_port",
+      "results": {
+        "saivs#1": {
+          "outcome": "passed",
+          "time": 0.037,
+          "message": ""
+        },
+        "saivs#2": {
+          "outcome": "passed",
+          "time": 0.038,
+          "message": ""
+        },
+        "saivpp#1": {
+          "outcome": "passed",
+          "time": 0.038,
+          "message": ""
+        },
+        "saivpp#2": {
+          "outcome": "passed",
+          "time": 0.037,
+          "message": ""
+        }
+      }
+    },
+    {
+      "file": "test_poc_acl.py",
+      "test": "TestPocAclDrop::test_poc_acl_drop_06_drop_port_is_dropped",
+      "results": {
+        "saivs#1": {
+          "outcome": "skipped",
+          "time": 0.001,
+          "message": "needs step(s) that did not pass: baseline"
+        },
+        "saivs#2": {
+          "outcome": "skipped",
+          "time": 0.001,
+          "message": "needs step(s) that did not pass: baseline"
+        },
+        "saivpp#1": {
+          "outcome": "passed",
+          "time": 2.005,
+          "message": ""
+        },
+        "saivpp#2": {
+          "outcome": "passed",
+          "time": 2.007,
+          "message": ""
+        }
+      }
+    },
+    {
+      "file": "test_poc_acl.py",
+      "test": "TestPocAclDrop::test_poc_acl_drop_07_fwd_port_is_forwarded",
+      "results": {
+        "saivs#1": {
+          "outcome": "skipped",
+          "time": 0.001,
+          "message": "needs step(s) that did not pass: baseline"
+        },
+        "saivs#2": {
+          "outcome": "skipped",
+          "time": 0.001,
+          "message": "needs step(s) that did not pass: baseline"
+        },
+        "saivpp#1": {
+          "outcome": "passed",
+          "time": 0.007,
+          "message": ""
+        },
+        "saivpp#2": {
+          "outcome": "passed",
+          "time": 0.006,
+          "message": ""
+        }
+      }
+    },
+    {
+      "file": "test_poc_acl.py",
+      "test": "TestPocAclDrop::test_poc_acl_drop_08_unmatched_port_informational",
+      "results": {
+        "saivs#1": {
+          "outcome": "skipped",
+          "time": 0.001,
+          "message": "needs step(s) that did not pass: baseline"
+        },
+        "saivs#2": {
+          "outcome": "skipped",
+          "time": 0.001,
+          "message": "needs step(s) that did not pass: baseline"
+        },
+        "saivpp#1": {
+          "outcome": "passed",
+          "time": 0.005,
+          "message": ""
+        },
+        "saivpp#2": {
+          "outcome": "passed",
+          "time": 0.005,
+          "message": ""
+        }
+      }
+    },
+    {
+      "file": "test_poc_acl.py",
+      "test": "TestPocAclDrop::test_poc_acl_drop_09_port_acl_readback",
+      "results": {
+        "saivs#1": {
+          "outcome": "passed",
+          "time": 0.013,
+          "message": ""
+        },
+        "saivs#2": {
+          "outcome": "passed",
+          "time": 0.013,
+          "message": ""
+        },
+        "saivpp#1": {
+          "outcome": "passed",
+          "time": 0.013,
+          "message": ""
+        },
+        "saivpp#2": {
+          "outcome": "passed",
+          "time": 0.013,
+          "message": ""
+        }
+      }
+    },
+    {
+      "file": "test_poc_acl.py",
+      "test": "TestPocAclDrop::test_poc_acl_drop_10_unbound",
+      "results": {
+        "saivs#1": {
+          "outcome": "passed",
+          "time": 0.013,
+          "message": ""
+        },
+        "saivs#2": {
+          "outcome": "passed",
+          "time": 0.013,
+          "message": ""
+        },
+        "saivpp#1": {
+          "outcome": "passed",
+          "time": 0.013,
+          "message": ""
+        },
+        "saivpp#2": {
+          "outcome": "passed",
+          "time": 0.013,
+          "message": ""
+        }
+      }
+    },
+    {
+      "file": "test_poc_acl.py",
+      "test": "TestPocAclDrop::test_poc_acl_drop_11_entries_removed",
+      "results": {
+        "saivs#1": {
+          "outcome": "passed",
+          "time": 0.025,
+          "message": ""
+        },
+        "saivs#2": {
+          "outcome": "passed",
+          "time": 0.025,
+          "message": ""
+        },
+        "saivpp#1": {
+          "outcome": "passed",
+          "time": 0.025,
+          "message": ""
+        },
+        "saivpp#2": {
+          "outcome": "passed",
+          "time": 0.025,
+          "message": ""
+        }
+      }
+    },
+    {
+      "file": "test_poc_acl.py",
+      "test": "TestPocAclDrop::test_poc_acl_drop_12_table_removed",
+      "results": {
+        "saivs#1": {
+          "outcome": "passed",
+          "time": 0.038,
+          "message": ""
+        },
+        "saivs#2": {
+          "outcome": "passed",
+          "time": 0.037,
+          "message": ""
+        },
+        "saivpp#1": {
+          "outcome": "passed",
+          "time": 0.038,
+          "message": ""
+        },
+        "saivpp#2": {
+          "outcome": "passed",
+          "time": 0.037,
+          "message": ""
+        }
+      }
+    },
+    {
+      "file": "test_poc_acl.py",
+      "test": "TestPocAclDrop::test_poc_acl_drop_13_forwarding_after_acl_removed",
+      "results": {
+        "saivs#1": {
+          "outcome": "skipped",
+          "time": 0.001,
+          "message": "needs step(s) that did not pass: baseline"
+        },
+        "saivs#2": {
+          "outcome": "skipped",
+          "time": 0.001,
+          "message": "needs step(s) that did not pass: baseline"
+        },
+        "saivpp#1": {
+          "outcome": "passed",
+          "time": 0.011,
+          "message": ""
+        },
+        "saivpp#2": {
+          "outcome": "passed",
+          "time": 0.01,
+          "message": ""
+        }
+      }
+    },
+    {
+      "file": "test_poc_acl.py",
+      "test": "TestPocAclDrop::test_poc_acl_drop_14_l2_removed_and_defaults_restored",
+      "results": {
+        "saivs#1": {
+          "outcome": "skipped",
+          "time": 0.001,
+          "message": "needs step(s) that did not pass: l2"
+        },
+        "saivs#2": {
+          "outcome": "skipped",
+          "time": 0.001,
+          "message": "needs step(s) that did not pass: l2"
+        },
+        "saivpp#1": {
+          "outcome": "passed",
+          "time": 0.11,
+          "message": ""
+        },
+        "saivpp#2": {
+          "outcome": "passed",
+          "time": 0.111,
+          "message": ""
+        }
+      }
+    },
+    {
+      "file": "test_poc_counters.py",
+      "test": "test_poc_counters_clear_read",
+      "results": {
+        "saivs#1": {
+          "outcome": "passed",
+          "time": 0.038,
+          "message": ""
+        },
+        "saivs#2": {
+          "outcome": "passed",
+          "time": 0.038,
+          "message": ""
+        },
+        "saivpp#1": {
+          "outcome": "failed",
+          "time": 0.191,
+          "message": "AssertionError: counters not zero after clear: {'SAI_PORT_STAT_IF_IN_OCTETS': 0, 'SAI_PORT_STAT_IF_OUT_OCTETS': 150}\nassert not True\n +  where True = any(dict_values([0, 150]))\n +    where dict_values([0, 150]) = <built-in method values of dict object at 0x7c80e5f8ef80>()\n +      where <built-in method values of dict object at 0x7c80e5f8ef80> = {'SAI_PORT_STAT_IF_IN_OCTETS': 0, 'SAI_PORT_STAT_IF_OUT_OCTETS': 150}.values"
+        },
+        "saivpp#2": {
+          "outcome": "failed",
+          "time": 0.185,
+          "message": "AssertionError: counters not zero after clear: {'SAI_PORT_STAT_IF_IN_OCTETS': 0, 'SAI_PORT_STAT_IF_OUT_OCTETS': 150}\nassert not True\n +  where True = any(dict_values([0, 150]))\n +    where dict_values([0, 150]) = <built-in method values of dict object at 0x79622e0bfb80>()\n +      where <built-in method values of dict object at 0x79622e0bfb80> = {'SAI_PORT_STAT_IF_IN_OCTETS': 0, 'SAI_PORT_STAT_IF_OUT_OCTETS': 150}.values"
+        }
+      }
+    }
+  ],
+  "gaps": [
+    {
+      "target": "saivs",
+      "test": "test_poc_acl_entry_unknown_field_rejected",
+      "reason": "target accepted an ACL entry with a field its table lacks",
+      "source": "report"
+    },
+    {
+      "target": "saivpp",
+      "test": "test_poc_acl_entry_unknown_field_rejected",
+      "reason": "target accepted an ACL entry with a field its table lacks",
+      "source": "report"
+    }
+  ],
+  "new_gaps": [
+    {
+      "target": "saivs",
+      "test": "test_poc_acl_entry_unknown_field_rejected"
+    },
+    {
+      "target": "saivpp",
+      "test": "test_poc_acl_entry_unknown_field_rejected"
+    }
+  ],
+  "stale": [],
+  "declared_but_failed": [
+    {
+      "target": "saivpp",
+      "test": "test_poc_acl_match_src_ipv6"
+    }
+  ],
+  "differs_across_runs": [],
+  "failures": [
+    {
+      "column": "saivpp#1",
+      "report": "saivpp-1019-042714.xml",
+      "test": "test_poc_acl.py::test_poc_acl_match_src_ipv6",
+      "error": "AssertionError: SRC_IPV6 entry create failed: SAI_STATUS_FAILURE",
+      "full_error": "AssertionError: SRC_IPV6 entry create failed: SAI_STATUS_FAILURE\nassert 'SAI_STATUS_FAILURE' == 'SAI_STATUS_SUCCESS'\n  \n  - SAI_STATUS_SUCCESS\n  + SAI_STATUS_FAILURE"
+    },
+    {
+      "column": "saivpp#1",
+      "report": "saivpp-1019-042714.xml",
+      "test": "test_poc_counters.py::test_poc_counters_clear_read",
+      "error": "AssertionError: counters not zero after clear: {'SAI_PORT_STAT_IF_IN_OCTETS': 0, 'SAI_PORT_STAT_IF_OUT_OCTETS': 150}",
+      "full_error": "AssertionError: counters not zero after clear: {'SAI_PORT_STAT_IF_IN_OCTETS': 0, 'SAI_PORT_STAT_IF_OUT_OCTETS': 150}\nassert not True\n +  where True = any(dict_values([0, 150]))\n +    where dict_values([0, 150]) = <built-in method values of dict object at 0x7c80e5f8ef80>()\n +      where <built-in method values of dict object at 0x7c80e5f8ef80> = {'SAI_PORT_STAT_IF_IN_OCTETS': 0, 'SAI_PORT_STAT_IF_OUT_OCTETS': 150}.values"
+    },
+    {
+      "column": "saivpp#2",
+      "report": "saivpp-1019-042740.xml",
+      "test": "test_poc_acl.py::test_poc_acl_match_src_ipv6",
+      "error": "AssertionError: SRC_IPV6 entry create failed: SAI_STATUS_FAILURE",
+      "full_error": "AssertionError: SRC_IPV6 entry create failed: SAI_STATUS_FAILURE\nassert 'SAI_STATUS_FAILURE' == 'SAI_STATUS_SUCCESS'\n  \n  - SAI_STATUS_SUCCESS\n  + SAI_STATUS_FAILURE"
+    },
+    {
+      "column": "saivpp#2",
+      "report": "saivpp-1019-042740.xml",
+      "test": "test_poc_counters.py::test_poc_counters_clear_read",
+      "error": "AssertionError: counters not zero after clear: {'SAI_PORT_STAT_IF_IN_OCTETS': 0, 'SAI_PORT_STAT_IF_OUT_OCTETS': 150}",
+      "full_error": "AssertionError: counters not zero after clear: {'SAI_PORT_STAT_IF_IN_OCTETS': 0, 'SAI_PORT_STAT_IF_OUT_OCTETS': 150}\nassert not True\n +  where True = any(dict_values([0, 150]))\n +    where dict_values([0, 150]) = <built-in method values of dict object at 0x79622e0bfb80>()\n +      where <built-in method values of dict object at 0x79622e0bfb80> = {'SAI_PORT_STAT_IF_IN_OCTETS': 0, 'SAI_PORT_STAT_IF_OUT_OCTETS': 150}.values"
+    }
+  ],
+  "profiles": {
+    "saivpp": {
+      "path": "/home/shubham/SAI-Challenger/tests/poc/targets/saivpp.json",
+      "xfail": {
+        "test_poc_acl_match_src_ipv6": "saivpp rejects an ACL entry with a SRC_IPV6 match field (entry create returns SAI_STATUS_FAILURE). The SAI spec allows it, so this is a gap on saivpp."
+      },
+      "scope_gaps": []
+    },
+    "saivs": null
+  }
+}

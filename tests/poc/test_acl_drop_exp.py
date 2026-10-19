@@ -51,11 +51,12 @@ TEST_DIR = os.path.dirname(os.path.abspath(__file__))
 if TEST_DIR not in sys.path:
     sys.path.insert(0, TEST_DIR)
 
-from saichallenger.common.sai_data import SaiObjType      # noqa: E402
-from lib.acl import AclHelper                             # noqa: E402
+from saichallenger.common.sai_data import SaiObjType
+
+from lib.acl import AclHelper
 
 try:
-    from ptf.testutils import simple_tcp_packet, send_packet, verify_packet
+    from ptf.testutils import send_packet, simple_tcp_packet, verify_packet
     PTF_IMPORT_ERROR = None
 except ImportError as exc:                                # only needed in traffic mode
     PTF_IMPORT_ERROR = exc
@@ -112,14 +113,14 @@ def _attempt(problems, label, fn):
     try:
         fn()
     except Exception as exc:                              # noqa: BLE001
-        problems.append("%s: %s" % (label, str(exc)[:150]))
+        problems.append(f"{label}: {str(exc)[:150]}")
 
 
 def l2_teardown(npu, s):
     """Undo the L2 setup in reverse order. Idempotent; returns a list of problems."""
     problems = []
     for mac in reversed(s.fdb):
-        _attempt(problems, "remove fdb %s" % mac, lambda m=mac: npu.remove_fdb(s.vlan, m))
+        _attempt(problems, f"remove fdb {mac}", lambda m=mac: npu.remove_fdb(s.vlan, m))
     s.fdb = []
     for oid in reversed(s.vlan_members):
         _attempt(problems, "remove vlan member", lambda o=oid: npu.remove(o))
@@ -145,8 +146,8 @@ def st(npu):
     yield s
     problems = s.acl.cleanup() + l2_teardown(npu, s)      # safety net for leftovers
     if problems:
-        print("SAFETY-NET CLEANUP PROBLEMS: %s" % problems)
-    print("RESULT FINAL: %s" % s.results)
+        print(f"SAFETY-NET CLEANUP PROBLEMS: {problems}")
+    print(f"RESULT FINAL: {s.results}")
 
 
 def step(name, needs=()):
@@ -157,7 +158,7 @@ def step(name, needs=()):
             s = kwargs["st"]
             missing = [n for n in needs if n not in s.done]
             if missing:
-                pytest.skip("needs step(s) that did not pass: %s" % ", ".join(missing))
+                pytest.skip("needs step(s) that did not pass: {}".format(", ".join(missing)))
             fn(*args, **kwargs)
             s.done.add(name)
         return wrapper
@@ -167,7 +168,7 @@ def step(name, needs=()):
 def need_traffic(npu):
     if not npu.run_traffic:
         pytest.skip("traffic mode is off (npu.run_traffic is False): no dataplane ports")
-    assert PTF_IMPORT_ERROR is None, "ptf.testutils not importable: %s" % PTF_IMPORT_ERROR
+    assert PTF_IMPORT_ERROR is None, f"ptf.testutils not importable: {PTF_IMPORT_ERROR}"
 
 
 # -------------------------------- packet helpers -----------------------------
@@ -196,15 +197,15 @@ def test_01_environment_and_ports_configured(npu, st):
     assert cfg["drop_tcp_port"] != cfg["fwd_tcp_port"], "drop and fwd TCP ports must differ"
     count = len(npu.port_oids)
     assert cfg["in_port"] < count and cfg["out_port"] < count, (
-        "configured ports in=%s out=%s but the testbed has only %s ports" % (cfg["in_port"], cfg["out_port"], count))
+        "configured ports in={} out={} but the testbed has only {} ports".format(cfg["in_port"], cfg["out_port"], count))
     if npu.run_traffic:
         missing = [a for a in L2_API if not hasattr(npu, a)]
-        assert not missing, "npu is missing helpers needed for traffic mode: %s" % missing
+        assert not missing, f"npu is missing helpers needed for traffic mode: {missing}"
         bps = len(npu.dot1q_bp_oids)
-        assert cfg["in_port"] < bps and cfg["out_port"] < bps, "bridge-port list too short: %s" % bps
-        assert PTF_IMPORT_ERROR is None, "ptf.testutils not importable: %s" % PTF_IMPORT_ERROR
-    print("CONFIG %s" % json.dumps(cfg, sort_keys=True))
-    print("CONFIG traffic_mode=%s ports_available=%s" % (npu.run_traffic, count))
+        assert cfg["in_port"] < bps and cfg["out_port"] < bps, f"bridge-port list too short: {bps}"
+        assert PTF_IMPORT_ERROR is None, f"ptf.testutils not importable: {PTF_IMPORT_ERROR}"
+    print(f"CONFIG {json.dumps(cfg, sort_keys=True)}")
+    print(f"CONFIG traffic_mode={npu.run_traffic} ports_available={count}")
     st.done.add("env")
 
 
@@ -225,7 +226,7 @@ def test_02_l2_forwarding_configured(npu, st):
     st.fdb.append(SRC_MAC)
     npu.create_fdb(st.vlan, DST_MAC, out_bp)
     st.fdb.append(DST_MAC)
-    print("RESULT l2_configured=True in_port=%s out_port=%s vlan=%s" % (CFG["in_port"], CFG["out_port"], vlan_id))
+    print("RESULT l2_configured=True in_port={} out_port={} vlan={}".format(CFG["in_port"], CFG["out_port"], vlan_id))
 
 
 @step("baseline", needs=["l2"])
@@ -233,17 +234,16 @@ def test_03_baseline_both_tcp_ports_forward(npu, dataplane, st):
     need_traffic(npu)
     drop_ok = arrives(dataplane, CFG["drop_tcp_port"])
     fwd_ok = arrives(dataplane, CFG["fwd_tcp_port"])
-    print("RESULT baseline tcp%s_forwarded=%s tcp%s_forwarded=%s"
-          % (CFG["drop_tcp_port"], drop_ok, CFG["fwd_tcp_port"], fwd_ok))
-    assert drop_ok and fwd_ok, ("Control check failed: TCP does not pass port %s -> %s even WITHOUT an ACL. "
-                                "Fix L2 forwarding before judging the ACL." % (CFG["in_port"], CFG["out_port"]))
+    print("RESULT baseline tcp{}_forwarded={} tcp{}_forwarded={}".format(CFG["drop_tcp_port"], drop_ok, CFG["fwd_tcp_port"], fwd_ok))
+    assert drop_ok and fwd_ok, ("Control check failed: TCP does not pass port {} -> {} even WITHOUT an ACL. "
+                                "Fix L2 forwarding before judging the ACL.".format(CFG["in_port"], CFG["out_port"]))
 
 
 @step("table", needs=["env"])
 def test_04_acl_table_created(npu, st):
     st.table = st.acl.create_table(fields=["IP_PROTOCOL", "L4_DST_PORT"])
-    assert st.table and st.table != "oid:0x0", "ACL table create returned %r" % st.table
-    print("RESULT acl_table_created=%s" % st.table)
+    assert st.table and st.table != "oid:0x0", f"ACL table create returned {st.table!r}"
+    print(f"RESULT acl_table_created={st.table}")
 
 
 @step("entries", needs=["table"])
@@ -251,13 +251,13 @@ def test_05_acl_drop_and_forward_entries_created(npu, st):
     status, drop_oid = st.acl.add_entry(
         st.table, 200, "SAI_PACKET_ACTION_DROP",
         [("IP_PROTOCOL", "6", "0xff"), ("L4_DST_PORT", str(CFG["drop_tcp_port"]), "0xffff")])
-    print("RESULT add_drop_entry tcp/%s: %s" % (CFG["drop_tcp_port"], status))
+    print("RESULT add_drop_entry tcp/{}: {}".format(CFG["drop_tcp_port"], status))
     assert status == "SAI_STATUS_SUCCESS", (
         "DROP entry rejected. Check `grep 'Unhandled ACL entry attribute' /var/log/syslog` in the container.")
     status, fwd_oid = st.acl.add_entry(
         st.table, 100, "SAI_PACKET_ACTION_FORWARD",
         [("IP_PROTOCOL", "6", "0xff"), ("L4_DST_PORT", str(CFG["fwd_tcp_port"]), "0xffff")])
-    print("RESULT add_forward_entry tcp/%s: %s" % (CFG["fwd_tcp_port"], status))
+    print("RESULT add_forward_entry tcp/{}: {}".format(CFG["fwd_tcp_port"], status))
     assert status == "SAI_STATUS_SUCCESS", "FORWARD entry rejected"
     st.entries = [drop_oid, fwd_oid]
 
@@ -269,25 +269,25 @@ def test_06_acl_bound_to_ingress_port(npu, st):
         st.group = st.acl.create_group(st.table)
         acl_oid = st.group
     st.acl.bind_to_port(acl_oid, npu.port_oids[CFG["in_port"]])
-    print("RESULT acl_bound mode=%s to_ptf_port=%s" % (CFG["bind_mode"], CFG["in_port"]))
+    print("RESULT acl_bound mode={} to_ptf_port={}".format(CFG["bind_mode"], CFG["in_port"]))
 
 
 @step("drop_checked", needs=["baseline", "bound"])
 def test_07_drop_port_is_dropped(npu, dataplane, st):
     need_traffic(npu)
     got = arrives(dataplane, CFG["drop_tcp_port"])
-    st.results["tcp%s_dropped" % CFG["drop_tcp_port"]] = not got
-    print("RESULT tcp%s_dropped=%s" % (CFG["drop_tcp_port"], not got))
-    assert not got, "TCP/%s still came out of the egress port - DROP rule had no effect" % CFG["drop_tcp_port"]
+    st.results["tcp{}_dropped".format(CFG["drop_tcp_port"])] = not got
+    print("RESULT tcp{}_dropped={}".format(CFG["drop_tcp_port"], not got))
+    assert not got, "TCP/{} still came out of the egress port - DROP rule had no effect".format(CFG["drop_tcp_port"])
 
 
 @step("fwd_checked", needs=["baseline", "bound"])
 def test_08_fwd_port_is_forwarded(npu, dataplane, st):
     need_traffic(npu)
     got = arrives(dataplane, CFG["fwd_tcp_port"])
-    st.results["tcp%s_forwarded" % CFG["fwd_tcp_port"]] = got
-    print("RESULT tcp%s_forwarded=%s" % (CFG["fwd_tcp_port"], got))
-    assert got, "TCP/%s did not arrive although a FORWARD entry exists" % CFG["fwd_tcp_port"]
+    st.results["tcp{}_forwarded".format(CFG["fwd_tcp_port"])] = got
+    print("RESULT tcp{}_forwarded={}".format(CFG["fwd_tcp_port"], got))
+    assert got, "TCP/{} did not arrive although a FORWARD entry exists".format(CFG["fwd_tcp_port"])
 
 
 @step("unmatched_checked", needs=["baseline", "bound"])
@@ -295,8 +295,8 @@ def test_09_unmatched_port_informational(npu, dataplane, st):
     """Packets matching NO rule. SAI says forward; VPP may drop (implicit deny). Never fails."""
     need_traffic(npu)
     got = arrives(dataplane, CFG["other_tcp_port"])
-    st.results["tcp%s_unmatched_forwarded" % CFG["other_tcp_port"]] = got
-    print("RESULT tcp%s_unmatched_forwarded=%s (info only; False = implicit deny)" % (CFG["other_tcp_port"], got))
+    st.results["tcp{}_unmatched_forwarded".format(CFG["other_tcp_port"])] = got
+    print("RESULT tcp{}_unmatched_forwarded={} (info only; False = implicit deny)".format(CFG["other_tcp_port"], got))
 
 
 
@@ -312,7 +312,7 @@ def test_11_acl_entries_removed(npu, st):
     for oid in reversed(st.entries):
         st.acl.remove_entry(oid)
     st.entries = []
-    assert st.acl.entries == [], "entries left behind: %s" % st.acl.entries
+    assert st.acl.entries == [], f"entries left behind: {st.acl.entries}"
     print("RESULT acl_entries_removed=True")
 
 
@@ -323,7 +323,7 @@ def test_12_acl_table_removed(npu, st):
         st.group = None
     st.acl.remove_table(st.table)
     st.table = None
-    assert st.acl.tables == [], "tables left behind: %s" % st.acl.tables
+    assert st.acl.tables == [], f"tables left behind: {st.acl.tables}"
     print("RESULT acl_table_removed=True")
 
 
@@ -332,13 +332,12 @@ def test_13_forwarding_still_works_after_acl_removed(npu, dataplane, st):
     need_traffic(npu)
     drop_ok = arrives(dataplane, CFG["drop_tcp_port"])
     fwd_ok = arrives(dataplane, CFG["fwd_tcp_port"])
-    print("RESULT after_acl_removal tcp%s_forwarded=%s tcp%s_forwarded=%s"
-          % (CFG["drop_tcp_port"], drop_ok, CFG["fwd_tcp_port"], fwd_ok))
+    print("RESULT after_acl_removal tcp{}_forwarded={} tcp{}_forwarded={}".format(CFG["drop_tcp_port"], drop_ok, CFG["fwd_tcp_port"], fwd_ok))
     assert drop_ok and fwd_ok, "L2 forwarding broke after the ACL was removed"
 
 
 @step("l2_removed", needs=["l2"])
 def test_14_l2_config_removed_and_defaults_restored(npu, st):
     problems = l2_teardown(npu, st)
-    print("RESULT l2_cleanup_problems=%s" % problems)
+    print(f"RESULT l2_cleanup_problems={problems}")
     assert not problems, problems

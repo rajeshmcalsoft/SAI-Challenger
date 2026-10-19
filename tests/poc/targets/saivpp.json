@@ -1,0 +1,7 @@
+{
+  "target": "saivpp",
+  "xfail": {
+    "test_poc_acl_match_src_ipv6": "saivpp rejects an ACL entry with a SRC_IPV6 match field (entry create returns SAI_STATUS_FAILURE). The SAI spec allows it, so this is a gap on saivpp."
+  },
+  "scope_gaps": []
+}
