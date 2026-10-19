@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SAI-Challenger Test Summary</title>
+<style>
+    body { font-family: Arial, sans-serif; background: #f4f6f9;
+           color: #263238; margin: 0; padding: 28px; }
+    main { max-width: 1200px; margin: auto; }
+    h1 { color: #172b4d; }
+    h2 { margin-top: 0; color: #243b53; }
+    section { background: white; border-radius: 10px; padding: 20px;
+              margin-bottom: 22px; box-shadow: 0 2px 8px #0000000d;
+              overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 10px 12px;
+             border-bottom: 1px solid #e5e7eb; }
+    th { background: #edf2f7; }
+    tr.file td { background: #f1f5f9; font-weight: bold; }
+    td.PASS { color: #16803d; }
+    td.FAIL, td.XPASS { color: #c62828; font-weight: bold; }
+    td.XFAIL { color: #a16207; font-weight: bold; }
+    td.SKIP, td.none { color: #64748b; }
+    .failure { border-left: 4px solid #dc2626; background: #fff5f5;
+               padding: 10px 12px; margin: 10px 0;
+               overflow-wrap: anywhere; }
+    .warn { border-left: 4px solid #d97706; background: #fffbeb;
+            padding: 8px 12px; margin: 8px 0; }
+    .muted { color: #64748b; }
+    @media (max-width: 600px) { body { padding: 12px; } }
+</style>
+</head>
+<body>
+<main>
+<h1>SAI-Challenger Test Summary</h1>
+<p class="muted">Pytest results parsed from JUnit XML reports.
+xfail reasons come from the target profiles.</p>
+
+<section><h2>Reports</h2><table><thead><tr>
+<th>Column</th><th>Report</th><th>Result</th></tr></thead><tbody>
+<tr><td>saivs#1</td><td>saivs-1019-042627.xml</td><td>16 passed, 0 failed, 1 xfail, 7 skipped</td></tr>
+<tr><td>saivs#2</td><td>saivs-1019-042654.xml</td><td>16 passed, 0 failed, 1 xfail, 7 skipped</td></tr>
+<tr><td>saivpp#1</td><td>saivpp-1019-042714.xml</td><td>21 passed, 2 failed, 1 xfail, 0 skipped</td></tr>
+<tr><td>saivpp#2</td><td>saivpp-1019-042740.xml</td><td>21 passed, 2 failed, 1 xfail, 0 skipped</td></tr>
+</tbody></table></section>
+<section><h2>Results side by side</h2><table><thead><tr>
+<th>Test</th>
+<th>saivs#1</th>
+<th>saivs#2</th>
+<th>saivpp#1</th>
+<th>saivpp#2</th>
+</tr></thead><tbody>
+<tr class="file"><td colspan="5">test_poc_acl.py</td></tr>
+<tr><td>test_poc_acl_table_create_remove</td>
+<td class="PASS">PASS <span class="muted">22.89s</span></td>
+<td class="PASS">PASS <span class="muted">16.35s</span></td>
+<td class="PASS">PASS <span class="muted">11.70s</span></td>
+<td class="PASS">PASS <span class="muted">9.97s</span></td>
+</tr>
+<tr><td>test_poc_acl_table_readback</td>
+<td class="PASS">PASS <span class="muted">0.04s</span></td>
+<td class="PASS">PASS <span class="muted">0.04s</span></td>
+<td class="PASS">PASS <span class="muted">0.04s</span></td>
+<td class="PASS">PASS <span class="muted">0.04s</span></td>
+</tr>
+<tr><td>test_poc_acl_entry_drop_create_remove</td>
+<td class="PASS">PASS <span class="muted">0.05s</span></td>
+<td class="PASS">PASS <span class="muted">0.05s</span></td>
+<td class="PASS">PASS <span class="muted">0.05s</span></td>
+<td class="PASS">PASS <span class="muted">0.05s</span></td>
+</tr>
+<tr><td>test_poc_acl_entry_priority_readback</td>
+<td class="PASS">PASS <span class="muted">0.06s</span></td>
+<td class="PASS">PASS <span class="muted">0.06s</span></td>
+<td class="PASS">PASS <span class="muted">0.07s</span></td>
+<td class="PASS">PASS <span class="muted">0.06s</span></td>
+</tr>
+<tr><td>test_poc_acl_bind_port</td>
+<td class="PASS">PASS <span class="muted">0.07s</span></td>
+<td class="PASS">PASS <span class="muted">0.07s</span></td>
+<td class="PASS">PASS <span class="muted">0.07s</span></td>
+<td class="PASS">PASS <span class="muted">0.07s</span></td>
+</tr>
+<tr><td>test_poc_acl_match_src_ipv6</td>
+<td class="PASS">PASS <span class="muted">0.05s</span></td>
+<td class="PASS">PASS <span class="muted">0.05s</span></td>
+<td class="FAIL">FAIL <span class="muted">0.04s</span></td>
+<td class="FAIL">FAIL <span class="muted">0.04s</span></td>
+</tr>
+<tr><td>test_poc_acl_match_dst_mac</td>
+<td class="PASS">PASS <span class="muted">0.05s</span></td>
+<td class="PASS">PASS <span class="muted">0.05s</span></td>
+<td class="PASS">PASS <span class="muted">7.60s</span></td>
+<td class="PASS">PASS <span class="muted">11.83s</span></td>
+</tr>
+<tr><td>test_poc_acl_table_group_create_remove</td>
+<td class="PASS">PASS <span class="muted">0.07s</span></td>
+<td class="PASS">PASS <span class="muted">0.07s</span></td>
+<td class="PASS">PASS <span class="muted">0.07s</span></td>
+<td class="PASS">PASS <span class="muted">0.07s</span></td>
+</tr>
+<tr><td>test_poc_acl_entry_unknown_field_rejected</td>
+<td class="XFAIL">XFAIL <span class="muted">0.05s</span></td>
+<td class="XFAIL">XFAIL <span class="muted">0.05s</span></td>
+<td class="XFAIL">XFAIL <span class="muted">0.05s</span></td>
+<td class="XFAIL">XFAIL <span class="muted">0.05s</span></td>
+</tr>
+<tr><td>TestPocAclDrop::test_poc_acl_drop_01_l2_configured</td>
+<td class="SKIP">SKIP <span class="muted">0.00s</span></td>
+<td class="SKIP">SKIP <span class="muted">0.00s</span></td>
+<td class="PASS">PASS <span class="muted">0.18s</span></td>
+<td class="PASS">PASS <span class="muted">0.18s</span></td>
+</tr>
+<tr><td>TestPocAclDrop::test_poc_acl_drop_02_baseline_both_ports_forward</td>
+<td class="SKIP">SKIP <span class="muted">0.00s</span></td>
+<td class="SKIP">SKIP <span class="muted">0.00s</span></td>
+<td class="PASS">PASS <span class="muted">0.01s</span></td>
+<td class="PASS">PASS <span class="muted">0.01s</span></td>
+</tr>
+<tr><td>TestPocAclDrop::test_poc_acl_drop_03_table_created</td>
+<td class="PASS">PASS <span class="muted">0.01s</span></td>
+<td class="PASS">PASS <span class="muted">0.01s</span></td>
+<td class="PASS">PASS <span class="muted">0.01s</span></td>
+<td class="PASS">PASS <span class="muted">0.01s</span></td>
+</tr>
+<tr><td>TestPocAclDrop::test_poc_acl_drop_04_entries_created</td>
+<td class="PASS">PASS <span class="muted">0.03s</span></td>
+<td class="PASS">PASS <span class="muted">0.03s</span></td>
+<td class="PASS">PASS <span class="muted">0.03s</span></td>
+<td class="PASS">PASS <span class="muted">0.03s</span></td>
+</tr>
+<tr><td>TestPocAclDrop::test_poc_acl_drop_05_bound_to_ingress_port</td>
+<td class="PASS">PASS <span class="muted">0.04s</span></td>
+<td class="PASS">PASS <span class="muted">0.04s</span></td>
+<td class="PASS">PASS <span class="muted">0.04s</span></td>
+<td class="PASS">PASS <span class="muted">0.04s</span></td>
+</tr>
+<tr><td>TestPocAclDrop::test_poc_acl_drop_06_drop_port_is_dropped</td>
+<td class="SKIP">SKIP <span class="muted">0.00s</span></td>
+<td class="SKIP">SKIP <span class="muted">0.00s</span></td>
+<td class="PASS">PASS <span class="muted">2.00s</span></td>
+<td class="PASS">PASS <span class="muted">2.01s</span></td>
+</tr>
+<tr><td>TestPocAclDrop::test_poc_acl_drop_07_fwd_port_is_forwarded</td>
+<td class="SKIP">SKIP <span class="muted">0.00s</span></td>
+<td class="SKIP">SKIP <span class="muted">0.00s</span></td>
+<td class="PASS">PASS <span class="muted">0.01s</span></td>
+<td class="PASS">PASS <span class="muted">0.01s</span></td>
+</tr>
+<tr><td>TestPocAclDrop::test_poc_acl_drop_08_unmatched_port_informational</td>
+<td class="SKIP">SKIP <span class="muted">0.00s</span></td>
+<td class="SKIP">SKIP <span class="muted">0.00s</span></td>
+<td class="PASS">PASS <span class="muted">0.01s</span></td>
+<td class="PASS">PASS <span class="muted">0.01s</span></td>
+</tr>
+<tr><td>TestPocAclDrop::test_poc_acl_drop_09_port_acl_readback</td>
+<td class="PASS">PASS <span class="muted">0.01s</span></td>
+<td class="PASS">PASS <span class="muted">0.01s</span></td>
+<td class="PASS">PASS <span class="muted">0.01s</span></td>
+<td class="PASS">PASS <span class="muted">0.01s</span></td>
+</tr>
+<tr><td>TestPocAclDrop::test_poc_acl_drop_10_unbound</td>
+<td class="PASS">PASS <span class="muted">0.01s</span></td>
+<td class="PASS">PASS <span class="muted">0.01s</span></td>
+<td class="PASS">PASS <span class="muted">0.01s</span></td>
+<td class="PASS">PASS <span class="muted">0.01s</span></td>
+</tr>
+<tr><td>TestPocAclDrop::test_poc_acl_drop_11_entries_removed</td>
+<td class="PASS">PASS <span class="muted">0.03s</span></td>
+<td class="PASS">PASS <span class="muted">0.03s</span></td>
+<td class="PASS">PASS <span class="muted">0.03s</span></td>
+<td class="PASS">PASS <span class="muted">0.03s</span></td>
+</tr>
+<tr><td>TestPocAclDrop::test_poc_acl_drop_12_table_removed</td>
+<td class="PASS">PASS <span class="muted">0.04s</span></td>
+<td class="PASS">PASS <span class="muted">0.04s</span></td>
+<td class="PASS">PASS <span class="muted">0.04s</span></td>
+<td class="PASS">PASS <span class="muted">0.04s</span></td>
+</tr>
+<tr><td>TestPocAclDrop::test_poc_acl_drop_13_forwarding_after_acl_removed</td>
+<td class="SKIP">SKIP <span class="muted">0.00s</span></td>
+<td class="SKIP">SKIP <span class="muted">0.00s</span></td>
+<td class="PASS">PASS <span class="muted">0.01s</span></td>
+<td class="PASS">PASS <span class="muted">0.01s</span></td>
+</tr>
+<tr><td>TestPocAclDrop::test_poc_acl_drop_14_l2_removed_and_defaults_restored</td>
+<td class="SKIP">SKIP <span class="muted">0.00s</span></td>
+<td class="SKIP">SKIP <span class="muted">0.00s</span></td>
+<td class="PASS">PASS <span class="muted">0.11s</span></td>
+<td class="PASS">PASS <span class="muted">0.11s</span></td>
+</tr>
+<tr class="file"><td colspan="5">test_poc_counters.py</td></tr>
+<tr><td>test_poc_counters_clear_read</td>
+<td class="PASS">PASS <span class="muted">0.04s</span></td>
+<td class="PASS">PASS <span class="muted">0.04s</span></td>
+<td class="FAIL">FAIL <span class="muted">0.19s</span></td>
+<td class="FAIL">FAIL <span class="muted">0.18s</span></td>
+</tr>
+</tbody></table></section>
+<section><h2>Gaps (xfail reasons)</h2>
+<table><thead><tr><th>Target</th><th>Test</th>
+<th>Reason</th><th>Source</th></tr></thead><tbody>
+<tr><td>saivs</td><td>test_poc_acl_entry_unknown_field_rejected</td><td>target accepted an ACL entry with a field its table lacks</td><td>report</td></tr>
+<tr><td>saivpp</td><td>test_poc_acl_entry_unknown_field_rejected</td><td>target accepted an ACL entry with a field its table lacks</td><td>report</td></tr>
+</tbody></table>
+</section>
+<section><h2>Profile checks</h2>
+<div class="warn">saivs: xfail tests found but no targets/saivs.json was found, so reasons come from the report.</div>
+<div class="warn">NEW GAP saivs: test_poc_acl_entry_unknown_field_rejected is xfail but not in the saivs profile. Add it to targets/saivs.json.</div>
+<div class="warn">NEW GAP saivpp: test_poc_acl_entry_unknown_field_rejected is xfail but not in the saivpp profile. Add it to targets/saivpp.json.</div>
+<div class="warn">saivpp: test_poc_acl_match_src_ipv6 is declared as a gap but FAILED (not xfail). The xfail marker is not being applied.</div>
+</section>
+<section><h2>Run consistency</h2>
+<p>saivs: same result in all 2 runs.</p>
+<p>saivpp: same result in all 2 runs.</p>
+</section>
+<section><h2>Failures</h2>
+<div class="failure"><strong>FAIL saivpp#1: test_poc_acl.py::test_poc_acl_match_src_ipv6</strong><p>AssertionError: SRC_IPV6 entry create failed: SAI_STATUS_FAILURE</p></div>
+<div class="failure"><strong>FAIL saivpp#1: test_poc_counters.py::test_poc_counters_clear_read</strong><p>AssertionError: counters not zero after clear: {&#x27;SAI_PORT_STAT_IF_IN_OCTETS&#x27;: 0, &#x27;SAI_PORT_STAT_IF_OUT_OCTETS&#x27;: 150}</p></div>
+<div class="failure"><strong>FAIL saivpp#2: test_poc_acl.py::test_poc_acl_match_src_ipv6</strong><p>AssertionError: SRC_IPV6 entry create failed: SAI_STATUS_FAILURE</p></div>
+<div class="failure"><strong>FAIL saivpp#2: test_poc_counters.py::test_poc_counters_clear_read</strong><p>AssertionError: counters not zero after clear: {&#x27;SAI_PORT_STAT_IF_IN_OCTETS&#x27;: 0, &#x27;SAI_PORT_STAT_IF_OUT_OCTETS&#x27;: 150}</p></div>
+</section>
+<p class="muted">Generated by summarize.py</p></main></body></html>

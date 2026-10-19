@@ -71,3 +71,41 @@ def test_poc_l2_vlan_invalid_id_rejected(npu, bad_id):
     finally:
         if status == SUCCESS:
             npu.remove(vlan_oid)
+
+IN_USE = "SAI_STATUS_OBJECT_IN_USE"
+
+
+@pytest.mark.negative
+def test_poc_l2_remove_vlan_with_members_rejected(npu, poc_ports):
+    """Removing a VLAN that still has a member fails with OBJECT_IN_USE; the VLAN stays."""
+    (p,) = poc_ports(1)
+    vlan30 = npu.create(SaiObjType.VLAN, ["SAI_VLAN_ATTR_VLAN_ID", "30"])
+    member = npu.create_vlan_member(vlan30, npu.dot1q_bp_oids[p], l2.TAGGED)
+    status = npu.remove(vlan30, do_assert=False)
+    try:
+        assert status == IN_USE, f"target removes a VLAN that has members: {status}"
+        assert npu.get(vlan30, ["SAI_VLAN_ATTR_VLAN_ID"]).value() == "30"
+    finally:
+        if status == SUCCESS:
+            npu.reset()  # the VLAN is gone but its member may remain; tell the team channel
+        else:
+            npu.remove(member)
+            npu.remove(vlan30)
+
+
+@pytest.mark.negative
+def test_poc_l2_remove_bridge_port_in_use_rejected(npu, poc_ports):
+    """Removing a bridge port that is a VLAN member fails with OBJECT_IN_USE; the port stays."""
+    (p,) = poc_ports(1)
+    bp_oid = npu.dot1q_bp_oids[p]
+    vlan30 = npu.create(SaiObjType.VLAN, ["SAI_VLAN_ATTR_VLAN_ID", "30"])
+    member = npu.create_vlan_member(vlan30, bp_oid, l2.TAGGED)
+    status = npu.remove(bp_oid, do_assert=False)
+    try:
+        assert status == IN_USE, f"target removes a bridge port that is in use: {status}"
+    finally:
+        if status == SUCCESS:
+            npu.reset()  # the default bridge port is gone; tell the team channel
+        else:
+            npu.remove(member)
+            npu.remove(vlan30)

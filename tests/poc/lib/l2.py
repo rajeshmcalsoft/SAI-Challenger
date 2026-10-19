@@ -25,9 +25,11 @@ def vlan(npu, vlan_id):
 
 @contextmanager
 def vlan_member(npu, vlan_oid, port_idx, tagging=UNTAGGED):
-    """Move port <port_idx> from the default VLAN into <vlan_oid>; yield the member OID.
+    """Add port <port_idx> to <vlan_oid>; yield the member OID.
 
-    Untagged members also get PVID = VLAN ID. Everything is restored on exit.
+    UNTAGGED (access): the port leaves the default VLAN and gets PVID = VLAN ID.
+    TAGGED (trunk): the port stays in the default VLAN, as in upstream test_l2_basic.py.
+    Everything is restored on exit.
     """
     bp_oid = npu.dot1q_bp_oids[port_idx]
     port_oid = npu.port_oids[port_idx]
@@ -35,8 +37,8 @@ def vlan_member(npu, vlan_oid, port_idx, tagging=UNTAGGED):
     with ExitStack() as undo:  # callbacks run last-registered-first
         if tagging == UNTAGGED:
             undo.callback(npu.set, port_oid, [PVID, npu.default_vlan_id])  # runs last
-        npu.remove_vlan_member(npu.default_vlan_oid, bp_oid)
-        undo.callback(npu.create_vlan_member, npu.default_vlan_oid, bp_oid, UNTAGGED)
+            npu.remove_vlan_member(npu.default_vlan_oid, bp_oid)
+            undo.callback(npu.create_vlan_member, npu.default_vlan_oid, bp_oid, UNTAGGED)
         member_oid = npu.create_vlan_member(vlan_oid, bp_oid, tagging)
         undo.callback(npu.remove, member_oid)  # runs first
         if tagging == UNTAGGED:
@@ -53,6 +55,21 @@ def static_fdb(npu, vlan_oid, mac, port_idx):
         yield bp_oid
     finally:
         npu.remove_fdb(vlan_oid, mac)
+
+
+@contextmanager
+def flush_on_exit(npu, vlan_oid):
+    """Flush every FDB entry of the VLAN on exit (learned MACs would break the next test).
+
+    Put it after the members in the with-statement so it runs before they are removed,
+    as upstream test_l2_vlan_bcast_ucast does.
+    """
+    try:
+        yield
+    finally:
+        npu.flush_fdb_entries(npu.switch_oid, [
+            "SAI_FDB_FLUSH_ATTR_BV_ID", vlan_oid,
+            "SAI_FDB_FLUSH_ATTR_ENTRY_TYPE", "SAI_FDB_FLUSH_ENTRY_TYPE_ALL"])
 
 
 @contextmanager
