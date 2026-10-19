@@ -21,7 +21,7 @@ out; it runs only on saivpp with --traffic.
 | GitHub and Docker Hub access | git ls-remote https://github.com/opencomputeproject/SAI-Challenger.git; docker pull hello-world |
 
 This PoC VM: Ubuntu 24.04.5 LTS, 4 vCPUs, 7 GB RAM, 64 GB free disk, Docker 29.1.3. That is below the
-recommended 8 vCPUs and 16 GB, so the plan runs the saithrift container instead of (not next to) the saivs container.
+recommended 8 vCPUs and 16 GB, with saivs, saivs-thrift and saivpp all running and Track A runs on each, peak memory used was 4098 MB and the lowest available was 3845 MB of 7943 MB (measured 19 Oct, runs one after another).
 
 ## 3. Shared VM setup
 
