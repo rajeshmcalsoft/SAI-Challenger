@@ -4,13 +4,27 @@ Track B (L3 unicast routing) fixtures.
 Each fixture creates what a test needs, hands it over, and undoes it in
 reverse order afterwards, even if the test fails. The SAI calls are copied
 from upstream: tests/ut/test_vrf_ut.py (VRF), tests/test_vrf.py::test_rif_create_remove
-(port RIF) and tests/native/test_route.py::test_route_update (neighbor, next hop).
+(port RIF), tests/native/test_route.py::test_route_update (neighbor, next hop)
+and tests/native/test_route.py::TestSviNeighbor (VLAN RIF).
 """
 
 from types import SimpleNamespace
 
 import pytest
 from saichallenger.common.sai_data import SaiObjType
+
+
+def _remove_all(npu, handles):
+    """Remove handles in reverse order; try all, then raise the first failure."""
+    first_error = None
+    for handle in reversed(handles):
+        try:
+            npu.remove(handle)
+        except Exception as err:  # noqa: BLE001
+            if first_error is None:
+                first_error = err
+    if first_error is not None:
+        raise first_error
 
 
 @pytest.fixture
@@ -82,6 +96,40 @@ def port_rif(npu, vrf, poc_ports):
             npu.set(port_oid, ["SAI_PORT_ATTR_PORT_VLAN_ID", npu.default_vlan_id])
 
 
+# VLAN used by the VLAN RIF test (Week 2-3 plan: "Create VLAN 40")
+VLAN_RIF_VLAN_ID = "40"
+
+
+@pytest.fixture
+def vlan_rif(npu, vrf):
+    """
+    Create VLAN 40 and a VLAN-type RIF on it in the `vrf` VRF.
+    Yields SimpleNamespace(rif=<rif oid>, vlan=<vlan oid>).
+    Teardown removes the RIF, then the VLAN, even if the test fails.
+
+    SUGGESTION (not from upstream): no bridge ports or VLAN members are created,
+    because Level 1 needs no forwarding. Upstream TestSviNeighbor adds members
+    because it sends packets. Whether each target accepts a member-less VLAN RIF
+    is not verified; if one rejects it, add a member as upstream does.
+    """
+    vlan_oid = npu.create(SaiObjType.VLAN, ["SAI_VLAN_ATTR_VLAN_ID", VLAN_RIF_VLAN_ID])
+    rif_oid = None
+    try:
+        rif_oid = npu.create(
+            SaiObjType.ROUTER_INTERFACE,
+            [
+                "SAI_ROUTER_INTERFACE_ATTR_VIRTUAL_ROUTER_ID", vrf,
+                "SAI_ROUTER_INTERFACE_ATTR_TYPE", "SAI_ROUTER_INTERFACE_TYPE_VLAN",
+                "SAI_ROUTER_INTERFACE_ATTR_VLAN_ID", vlan_oid,
+            ],
+        )
+        yield SimpleNamespace(rif=rif_oid, vlan=vlan_oid)
+    finally:
+        if rif_oid is not None:
+            npu.remove(rif_oid)
+        npu.remove(vlan_oid)
+
+
 @pytest.fixture
 def neighbor_nexthop(npu):
     """
@@ -133,13 +181,52 @@ def neighbor_nexthop(npu):
     try:
         yield SimpleNamespace(create=create, remove=remove)
     finally:
-        # Try every removal even if one fails, then report the first failure
-        first_error = None
-        for handle in reversed(created):
-            try:
-                npu.remove(handle)
-            except Exception as err:  # noqa: BLE001
-                if first_error is None:
-                    first_error = err
-        if first_error is not None:
-            raise first_error
+        _remove_all(npu, created)
+
+
+@pytest.fixture
+def next_hop_group(npu, neighbor_nexthop):
+    """
+    Helper object for next hop groups:
+
+      next_hop_group.create() -> group_oid
+      next_hop_group.add_member(group_oid, nexthop_oid) -> member_oid
+      next_hop_group.remove(handle, do_assert=True) -> status
+
+    Teardown removes whatever is left in reverse order (members before their
+    group). It depends on `neighbor_nexthop` only so that pytest tears this
+    fixture down first: members reference next hops, so they must go first.
+
+    The group type is the one used by upstream tests/api/test_next_hop_group.py.
+    """
+    created = []  # group and member OIDs in creation order
+
+    def create():
+        group_oid = npu.create(
+            SaiObjType.NEXT_HOP_GROUP,
+            ["SAI_NEXT_HOP_GROUP_ATTR_TYPE", "SAI_NEXT_HOP_GROUP_TYPE_DYNAMIC_UNORDERED_ECMP"],
+        )
+        created.append(group_oid)
+        return group_oid
+
+    def add_member(group_oid, nexthop_oid):
+        member_oid = npu.create(
+            SaiObjType.NEXT_HOP_GROUP_MEMBER,
+            [
+                "SAI_NEXT_HOP_GROUP_MEMBER_ATTR_NEXT_HOP_GROUP_ID", group_oid,
+                "SAI_NEXT_HOP_GROUP_MEMBER_ATTR_NEXT_HOP_ID", nexthop_oid,
+            ],
+        )
+        created.append(member_oid)
+        return member_oid
+
+    def remove(handle, do_assert=True):
+        status = npu.remove(handle, do_assert)
+        if status == "SAI_STATUS_SUCCESS":
+            created.remove(handle)
+        return status
+
+    try:
+        yield SimpleNamespace(create=create, add_member=add_member, remove=remove)
+    finally:
+        _remove_all(npu, created)
