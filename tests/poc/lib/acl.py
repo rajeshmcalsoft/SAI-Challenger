@@ -34,15 +34,15 @@ class AclHelper:
     def create_table(self, fields, stage="INGRESS", bind_point="PORT"):
         """fields: names without prefix, e.g. ["IP_PROTOCOL", "L4_DST_PORT"]."""
         attrs = [
-            "SAI_ACL_TABLE_ATTR_ACL_STAGE", "SAI_ACL_STAGE_%s" % stage,
-            "SAI_ACL_TABLE_ATTR_ACL_BIND_POINT_TYPE_LIST", "1:SAI_ACL_BIND_POINT_TYPE_%s" % bind_point,
+            "SAI_ACL_TABLE_ATTR_ACL_STAGE", f"SAI_ACL_STAGE_{stage}",
+            "SAI_ACL_TABLE_ATTR_ACL_BIND_POINT_TYPE_LIST", f"1:SAI_ACL_BIND_POINT_TYPE_{bind_point}",
             "SAI_ACL_TABLE_ATTR_ACL_ACTION_TYPE_LIST", "1:SAI_ACL_ACTION_TYPE_PACKET_ACTION",
         ]
         for f in fields:
-            attrs += ["SAI_ACL_TABLE_ATTR_FIELD_%s" % f, "true"]
+            attrs += [f"SAI_ACL_TABLE_ATTR_FIELD_{f}", "true"]
         oid = self.npu.create(SaiObjType.ACL_TABLE, attrs)
         self.tables.append(oid)
-        self.log.append(("create_table %s" % list(fields), OK))
+        self.log.append((f"create_table {list(fields)}", OK))
         return oid
 
     def add_entry(self, table, priority, action, match):
@@ -55,7 +55,7 @@ class AclHelper:
             "SAI_ACL_ENTRY_ATTR_ACTION_PACKET_ACTION", action,
         ]
         for name, value, mask in match:
-            attrs += ["SAI_ACL_ENTRY_ATTR_FIELD_%s" % name, "%s&mask:%s" % (value, mask)]
+            attrs += [f"SAI_ACL_ENTRY_ATTR_FIELD_{name}", f"{value}&mask:{mask}"]
         status, oid = self.npu.create(SaiObjType.ACL_ENTRY, attrs, do_assert=False)
         self.log.append(("add_entry %s" % [m[0] for m in match], status))
         if status == OK:
@@ -65,8 +65,8 @@ class AclHelper:
     def create_group(self, table, stage="INGRESS", bind_point="PORT", priority="100"):
         """Optional: table group + one member holding `table`. Returns the group oid."""
         group = self.npu.create(SaiObjType.ACL_TABLE_GROUP, [
-            "SAI_ACL_TABLE_GROUP_ATTR_ACL_STAGE", "SAI_ACL_STAGE_%s" % stage,
-            "SAI_ACL_TABLE_GROUP_ATTR_ACL_BIND_POINT_TYPE_LIST", "1:SAI_ACL_BIND_POINT_TYPE_%s" % bind_point,
+            "SAI_ACL_TABLE_GROUP_ATTR_ACL_STAGE", f"SAI_ACL_STAGE_{stage}",
+            "SAI_ACL_TABLE_GROUP_ATTR_ACL_BIND_POINT_TYPE_LIST", f"1:SAI_ACL_BIND_POINT_TYPE_{bind_point}",
             "SAI_ACL_TABLE_GROUP_ATTR_TYPE", "SAI_ACL_TABLE_GROUP_TYPE_PARALLEL",
         ])
         self.groups.append(group)
@@ -84,12 +84,12 @@ class AclHelper:
         """acl_oid: a table oid, or a group oid from create_group()."""
         self.npu.set(port_oid, [attr, acl_oid])
         self.bindings.append((port_oid, attr))
-        self.log.append(("bind port %s" % port_oid, OK))
+        self.log.append((f"bind port {port_oid}", OK))
 
     def unbind_port(self, port_oid, attr=PORT_ACL_ATTR):
         self.npu.set(port_oid, [attr, UNBOUND])
         self.bindings = [b for b in self.bindings if b != (port_oid, attr)]
-        self.log.append(("unbind port %s" % port_oid, OK))
+        self.log.append((f"unbind port {port_oid}", OK))
 
     # ---- strict single-object removal (raise on failure) ---------------
     def remove_entry(self, oid):
@@ -122,18 +122,18 @@ class AclHelper:
             try:
                 fn()
             except Exception as e:                       # noqa: BLE001
-                problems.append("%s: %s" % (label, str(e)[:150]))
+                problems.append(f"{label}: {str(e)[:150]}")
 
         for port_oid, attr in reversed(self.bindings):
-            attempt("unbind %s" % port_oid, lambda p=port_oid, a=attr: self.npu.set(p, [a, UNBOUND]))
+            attempt(f"unbind {port_oid}", lambda p=port_oid, a=attr: self.npu.set(p, [a, UNBOUND]))
         for oid in reversed(self.entries):
-            attempt("remove entry %s" % oid, lambda o=oid: self.npu.remove(o))
+            attempt(f"remove entry {oid}", lambda o=oid: self.npu.remove(o))
         for oid in reversed(self.members):
-            attempt("remove group member %s" % oid, lambda o=oid: self.npu.remove(o))
+            attempt(f"remove group member {oid}", lambda o=oid: self.npu.remove(o))
         for oid in reversed(self.groups):
-            attempt("remove group %s" % oid, lambda o=oid: self.npu.remove(o))
+            attempt(f"remove group {oid}", lambda o=oid: self.npu.remove(o))
         for oid in reversed(self.tables):
-            attempt("remove table %s" % oid, lambda o=oid: self.npu.remove(o))
+            attempt(f"remove table {oid}", lambda o=oid: self.npu.remove(o))
         self.bindings, self.entries, self.members, self.groups, self.tables = [], [], [], [], []
         return problems
 

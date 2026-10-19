@@ -1,5 +1,6 @@
 {
   "name": "saivpp",
+  "target": "saivpp",
   "testbed": "saivpp_standalone",
   "exec_args": ["-a", "vpp", "-t", "saivpp"],
   "lock": "saivpp",
@@ -10,6 +11,8 @@
     "test_poc_l2_vlan_invalid_id_rejected[0]": "Target accepts VLAN ID 0",
     "test_poc_l2_vlan_invalid_id_rejected[4095]": "Target accepts VLAN ID 4095",
     "test_poc_l2_vlan_invalid_id_rejected[4096]": "Target accepts VLAN ID 4096",
+    "test_poc_l2_vlan_duplicate_rejected": "Duplicate VLAN returns INVALID_PARAMETER, expected ITEM_ALREADY_EXISTS",
+    "test_poc_acl_match_src_ipv6": "saivpp rejects an ACL entry with a SRC_IPV6 match field (entry create returns SAI_STATUS_FAILURE). The SAI spec allows it, so this is a gap on saivpp.",
     "test_poc_l2_vlan_duplicate_rejected": "Duplicate VLAN returns INVALID_PARAMETER, expected ITEM_ALREADY_EXISTS"
   }
 }
