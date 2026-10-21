@@ -3,7 +3,7 @@
 
 import pytest
 
-from .lib.l3 import neighbor_nexthop, next_hop_group, port_rif, vrf  # noqa: F401  (pytest fixtures)
+from .lib.l3 import neighbor_nexthop, next_hop_group, port_rif, vlan_rif, vrf  # noqa: F401  (pytest fixtures)
 
 pytestmark = pytest.mark.l3
 
@@ -13,6 +13,8 @@ NEIGHBOR_MAC = "00:11:22:33:44:55"
 # Second neighbor, as in upstream test_route_update
 NEIGHBOR_IP_2 = "10.10.10.3"
 NEIGHBOR_MAC_2 = "00:11:22:33:44:66"
+# SUGGESTION (not from the plans or upstream): IPv6 documentation address (RFC 3849)
+NEIGHBOR_IP_V6 = "2001:db8::2"
 ROUTE_V4 = "100.0.0.0/8"
 # SUGGESTION (not from the plans or upstream): IPv6 documentation prefix (RFC 3849)
 ROUTE_V6 = "2001:db8::/32"
@@ -20,6 +22,7 @@ PACKET_ACTION = "SAI_ROUTE_ENTRY_ATTR_PACKET_ACTION"
 FORWARD = "SAI_PACKET_ACTION_FORWARD"
 DROP = "SAI_PACKET_ACTION_DROP"
 NEXT_HOP_ID = "SAI_ROUTE_ENTRY_ATTR_NEXT_HOP_ID"
+SUCCESS = "SAI_STATUS_SUCCESS"
 
 
 def test_poc_l3_vrf_default_admin_state(npu, vrf):
@@ -74,6 +77,13 @@ def test_poc_l3_neighbor_nexthop_create_remove(npu, port_rif, neighbor_nexthop):
 
 def _cpu_port_oid(npu):
     return npu.get(npu.switch_oid, ["SAI_SWITCH_ATTR_CPU_PORT", "oid:0x0"]).oid()
+
+
+def _status(result):
+    # npu.create(key, attrs, False) returns (status, vid) on the redis client
+    # (read in common/sai_client/sai_redis_client/sai_redis_client.py). The
+    # saithrift client was NOT read, so a plain status string is accepted too.
+    return result[0] if isinstance(result, tuple) else result
 
 
 def _route_create_remove(npu, vrf, prefix):
@@ -147,4 +157,63 @@ def test_poc_l3_route_nexthop_change(npu, vrf, port_rif, neighbor_nexthop):
         npu.set(route_key, [NEXT_HOP_ID, nexthop_2])
         assert npu.get(route_key, [NEXT_HOP_ID, "oid:0x0"]).oid() == nexthop_2
     finally:
+        npu.remove_route(ROUTE_V4, vrf)
+
+
+def test_poc_l3_vlan_rif_create_remove(npu, vlan_rif):
+    # Plan: create VLAN 40 and a VLAN RIF on it, read TYPE and VLAN_ID; the
+    # fixture removes the RIF and then the VLAN.
+    rif_type = npu.get(vlan_rif.rif, ["SAI_ROUTER_INTERFACE_ATTR_TYPE"]).value()
+    assert rif_type == "SAI_ROUTER_INTERFACE_TYPE_VLAN"
+    assert npu.get(vlan_rif.rif, ["SAI_ROUTER_INTERFACE_ATTR_VLAN_ID"]).oid() == vlan_rif.vlan
+
+
+def test_poc_l3_ipv6_neighbor_create_remove(npu, port_rif, neighbor_nexthop):
+    # Plan: IPv6 neighbor on a port RIF, read DST_MAC_ADDRESS, remove it.
+    # The next hop is created too, as in the IPv4 test. Same MAC placeholder.
+    neighbor_key, nexthop_oid = neighbor_nexthop.create(port_rif, NEIGHBOR_IP_V6, NEIGHBOR_MAC)
+    mac = npu.get(neighbor_key, ["SAI_NEIGHBOR_ENTRY_ATTR_DST_MAC_ADDRESS", "00:00:00:00:00:00"]).value()
+    assert mac.lower() == NEIGHBOR_MAC
+    neighbor_nexthop.remove(nexthop_oid)
+    neighbor_nexthop.remove(neighbor_key)
+
+
+def test_poc_l3_route_duplicate_rejected(npu, vrf):
+    # Original plan: "Adding the same route twice fails". Asserts only "not
+    # SUCCESS"; the exact status goes in the tracker. A target that accepts the
+    # duplicate is recorded in its profile (expected_gaps), not here.
+    cpu_port_oid = _cpu_port_oid(npu)
+    npu.create_route(ROUTE_V4, vrf, cpu_port_oid, [PACKET_ACTION, FORWARD])
+    try:
+        route_key = npu._route_entry_key(vrf, ROUTE_V4)
+        # npu.create_route has no do_assert option, so call npu.create directly.
+        # Fresh attribute list: the client rewrites list items in place.
+        result = npu.create(route_key, [NEXT_HOP_ID, cpu_port_oid, PACKET_ACTION, FORWARD], False)
+        assert _status(result) != SUCCESS
+    finally:
+        npu.remove_route(ROUTE_V4, vrf)
+
+
+def test_poc_l3_route_invalid_nexthop_rejected(npu, vrf):
+    # The VRF OID is a well-formed, existing OID of a type that
+    # SAI_ROUTE_ENTRY_ATTR_NEXT_HOP_ID does not accept (sairoute.h lists NEXT_HOP,
+    # NEXT_HOP_GROUP, ROUTER_INTERFACE and PORT). Do not use a RIF OID here: a RIF
+    # is a valid next hop id for a route.
+    route_key = npu._route_entry_key(vrf, ROUTE_V4)
+    status = _status(npu.create(route_key, [NEXT_HOP_ID, vrf], False))
+    try:
+        assert status != SUCCESS
+    finally:
+        if status == SUCCESS:  # nothing must be left behind
+            npu.remove(route_key)
+
+
+def test_poc_l3_nexthop_in_use_rejected(npu, vrf, port_rif, neighbor_nexthop):
+    _, nexthop_oid = neighbor_nexthop.create(port_rif, NEIGHBOR_IP, NEIGHBOR_MAC)
+    npu.create_route(ROUTE_V4, vrf, nexthop_oid)
+    try:
+        status = neighbor_nexthop.remove(nexthop_oid, do_assert=False)
+        assert status == "SAI_STATUS_OBJECT_IN_USE"
+    finally:
+        # The route must go before the fixture removes the next hop
         npu.remove_route(ROUTE_V4, vrf)

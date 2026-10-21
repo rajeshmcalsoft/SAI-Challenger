@@ -4,7 +4,8 @@ Track B (L3 unicast routing) fixtures.
 Each fixture creates what a test needs, hands it over, and undoes it in
 reverse order afterwards, even if the test fails. The SAI calls are copied
 from upstream: tests/ut/test_vrf_ut.py (VRF), tests/test_vrf.py::test_rif_create_remove
-(port RIF) and tests/native/test_route.py::test_route_update (neighbor, next hop).
+(port RIF), tests/native/test_route.py::test_route_update (neighbor, next hop)
+and tests/native/test_route.py::TestSviNeighbor (VLAN RIF).
 """
 
 from types import SimpleNamespace
@@ -93,6 +94,40 @@ def port_rif(npu, vrf, poc_ports):
                 npu.default_vlan_oid, bp_oid, "SAI_VLAN_TAGGING_MODE_UNTAGGED"
             )
             npu.set(port_oid, ["SAI_PORT_ATTR_PORT_VLAN_ID", npu.default_vlan_id])
+
+
+# VLAN used by the VLAN RIF test (Week 2-3 plan: "Create VLAN 40")
+VLAN_RIF_VLAN_ID = "40"
+
+
+@pytest.fixture
+def vlan_rif(npu, vrf):
+    """
+    Create VLAN 40 and a VLAN-type RIF on it in the `vrf` VRF.
+    Yields SimpleNamespace(rif=<rif oid>, vlan=<vlan oid>).
+    Teardown removes the RIF, then the VLAN, even if the test fails.
+
+    SUGGESTION (not from upstream): no bridge ports or VLAN members are created,
+    because Level 1 needs no forwarding. Upstream TestSviNeighbor adds members
+    because it sends packets. Whether each target accepts a member-less VLAN RIF
+    is not verified; if one rejects it, add a member as upstream does.
+    """
+    vlan_oid = npu.create(SaiObjType.VLAN, ["SAI_VLAN_ATTR_VLAN_ID", VLAN_RIF_VLAN_ID])
+    rif_oid = None
+    try:
+        rif_oid = npu.create(
+            SaiObjType.ROUTER_INTERFACE,
+            [
+                "SAI_ROUTER_INTERFACE_ATTR_VIRTUAL_ROUTER_ID", vrf,
+                "SAI_ROUTER_INTERFACE_ATTR_TYPE", "SAI_ROUTER_INTERFACE_TYPE_VLAN",
+                "SAI_ROUTER_INTERFACE_ATTR_VLAN_ID", vlan_oid,
+            ],
+        )
+        yield SimpleNamespace(rif=rif_oid, vlan=vlan_oid)
+    finally:
+        if rif_oid is not None:
+            npu.remove(rif_oid)
+        npu.remove(vlan_oid)
 
 
 @pytest.fixture
