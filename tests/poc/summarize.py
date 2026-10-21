@@ -35,6 +35,7 @@ OUTPUT:
     stale entries), run-to-run consistency, and failure details.
 
     --all-runs     one column per run instead of the latest per target
+    --runs N       use only the newest N runs of each target
     --md FILE      Markdown summary
     --json FILE    full data, including untruncated errors
     --html FILE    styled HTML report
@@ -42,7 +43,7 @@ OUTPUT:
 Examples:
     python3 summarize.py poc_shubham/reports/saivs-1016-0930.xml \\
                          poc_shubham/reports/saivpp-1016-1130.xml
-    python3 summarize.py poc_shubham/reports/ --all-runs
+    python3 summarize.py poc_shubham/reports/ --runs 2 --all-runs
     python3 summarize.py reports/*.xml --profiles targets --md summary.md
     python3 summarize.py --html summary.html --md summary.md --json summary.json
 
@@ -65,8 +66,9 @@ DEFAULT_DIRS = [
     os.path.join("poc", "reports"),
     os.path.join("poc_shubham", "reports"),
 ]
-KNOWN_TARGETS = ("saivpp", "saivs")
-TARGET_ORDER = {"saivs": 0, "saivpp": 1}
+# Longest name first: "saivs-thrift-..." must not be read as plain "saivs".
+KNOWN_TARGETS = ("saivs-thrift", "saivpp", "saivs")
+TARGET_ORDER = {"saivs": 0, "saivs-thrift": 1, "saivpp": 2}
 MAX_ERR = 170
 
 # Worst outcome wins when pytest writes one test twice (a test plus a
@@ -155,13 +157,13 @@ def classify(testcase):
 
 def detect_target(path):
     """Find the target name in a report file name (saivs, saivpp, ...)."""
-    base = os.path.basename(path).lower()
+    base = os.path.basename(path).lower().replace("_", "-")
 
     for name in KNOWN_TARGETS:
         if name in base:
             return name
 
-    match = re.match(r"([a-z0-9]+)", base)
+    match = re.match(r"([a-z0-9]+(?:-[a-z]+)?)", base)
     return match.group(1) if match else "?"
 
 
@@ -236,8 +238,11 @@ def _reason_text(value):
 
 
 def _bare_name(name):
-    """tests/poc/test_x.py::test_y[param] -> test_y"""
-    return str(name).split("::")[-1].split("[")[0].strip()
+    """tests/poc/test_x.py::test_y[param] -> test_y[param]
+
+    The parameter stays: test_y[0] and test_y[4095] are different gaps. A
+    profile entry without a parameter still matches every parameter."""
+    return str(name).split("::")[-1].strip()
 
 
 def parse_profile(data):
@@ -397,6 +402,15 @@ def build_model(runs, all_runs, profiles):
                 stale.append((target, test["name"]))
             elif declared is not None and test["outcome"] == "failed":
                 declared_failed.append((target, test["name"]))
+                # Still a declared gap: show its reason in the Gaps table.
+                gaps.append(
+                    {
+                        "target": target,
+                        "test": test["name"],
+                        "reason": declared or test["message"],
+                        "source": "profile, test FAILED (no xfail marker)",
+                    }
+                )
 
         if saw_xfail and not profile:
             no_profile.append(target)
@@ -429,7 +443,9 @@ def build_model(runs, all_runs, profiles):
                 run["tests"][key]["outcome"] if key in run["tests"] else None
                 for run in series
             ]
-            if len(set(results)) > 1:
+            # A run that did not include the test says nothing about it, so
+            # only runs that did execute it are compared.
+            if len({r for r in results if r is not None}) > 1:
                 unstable += 1
                 flaky.append(
                     {
@@ -584,7 +600,12 @@ def render(model):
     out.append("-" * 20)
     if model["gaps"]:
         for gap in model["gaps"]:
-            tag = "" if gap["source"] == "profile" else "  [not in profile]"
+            if gap["source"] == "profile":
+                tag = ""
+            elif gap["source"].startswith("profile"):
+                tag = "  [declared in profile; test FAILED, no xfail marker]"
+            else:
+                tag = "  [not in profile]"
             out.append(f"  {gap['target']:<8} {gap['test']}")
             out.append(f"           {gap['reason'] or '(no reason given)'}{tag}")
     else:
@@ -687,121 +708,155 @@ HTML_HEAD = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SAI-Challenger Test Summary</title>
+<title>SAI-Challenger | Test Summary</title>
 <style>
-    body { font-family: Arial, sans-serif; background: #f4f6f9;
-           color: #263238; margin: 0; padding: 28px; }
-    main { max-width: 1200px; margin: auto; }
-    h1 { color: #172b4d; }
-    h2 { margin-top: 0; color: #243b53; }
-    section { background: white; border-radius: 10px; padding: 20px;
-              margin-bottom: 22px; box-shadow: 0 2px 8px #0000000d;
-              overflow-x: auto; }
-    table { width: 100%; border-collapse: collapse; }
-    th, td { text-align: left; padding: 10px 12px;
-             border-bottom: 1px solid #e5e7eb; }
-    th { background: #edf2f7; }
-    tr.file td { background: #f1f5f9; font-weight: bold; }
-    td.PASS { color: #16803d; }
-    td.FAIL, td.XPASS { color: #c62828; font-weight: bold; }
-    td.XFAIL { color: #a16207; font-weight: bold; }
-    td.SKIP, td.none { color: #64748b; }
-    .failure { border-left: 4px solid #dc2626; background: #fff5f5;
-               padding: 10px 12px; margin: 10px 0;
-               overflow-wrap: anywhere; }
-    .warn { border-left: 4px solid #d97706; background: #fffbeb;
-            padding: 8px 12px; margin: 8px 0; }
-    .muted { color: #64748b; }
-    @media (max-width: 600px) { body { padding: 12px; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 22px; background: #f5f7fb; color: #1f2937;
+         font: 14px/1.45 Arial, Helvetica, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; }
+  h1 { margin: 0; font-size: 24px; color: #172554; }
+  h2 { margin: 0 0 12px; font-size: 16px; color: #243b53; }
+  .subtitle { margin: 4px 0 18px; color: #64748b; font-size: 12px; }
+  section { background: #fff; border: 1px solid #e5eaf1; border-radius: 10px;
+            padding: 15px; margin: 0 0 14px; overflow-x: auto; }
+  .targets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+             gap: 10px; margin-bottom: 14px; }
+  .target { background: #fff; border: 1px solid #e5eaf1; border-radius: 10px;
+            padding: 13px; min-width: 0; }
+  .target h2 { margin-bottom: 6px; }
+  .big { font-size: 22px; font-weight: 700; }
+  .small { font-size: 12px; color: #64748b; }
+  .status { display: inline-block; border-radius: 5px; padding: 2px 7px;
+            font-size: 11px; font-weight: 700; }
+  .ok { color: #166534; background: #dcfce7; }
+  .bad { color: #991b1b; background: #fee2e2; }
+  .warn { color: #92400e; background: #fef3c7; }
+  .neutral { color: #475569; background: #e2e8f0; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 9px; border-bottom: 1px solid #edf0f4;
+           vertical-align: top; }
+  th { background: #f8fafc; color: #475569; font-size: 12px; }
+  tr:last-child td { border-bottom: 0; }
+  tr.file td { background: #f8fafc; color: #334155; font-weight: 700; }
+  td.PASS { color: #15803d; font-weight: 700; }
+  td.FAIL, td.XPASS { color: #b91c1c; font-weight: 700; }
+  td.XFAIL { color: #a16207; font-weight: 700; }
+  td.SKIP, td.none { color: #64748b; }
+  .failure { border-left: 3px solid #dc2626; background: #fff7f7;
+             padding: 9px 11px; margin: 8px 0; overflow-wrap: anywhere; }
+  .note { border-left: 3px solid #d97706; background: #fffbeb;
+          padding: 8px 10px; margin: 7px 0; overflow-wrap: anywhere; }
+  footer { color: #94a3b8; font-size: 11px; text-align: right; padding: 2px 0 10px; }
+  @media (max-width: 700px) {
+    body { padding: 12px; }
+    .targets { grid-template-columns: 1fr; }
+    section { padding: 11px; }
+    th, td { padding: 7px 6px; }
+  }
 </style>
 </head>
 <body>
 <main>
-<h1>SAI-Challenger Test Summary</h1>
-<p class="muted">Pytest results parsed from JUnit XML reports.
-xfail reasons come from the target profiles.</p>
+<header>
+  <h1>SAI-Challenger</h1>
+  <p class="subtitle">PoC test summary · latest run per target by default</p>
+</header>
 """
 
 
+def _summary_status(totals):
+    if totals["failed"] or totals["xpass"]:
+        return "FAIL", "bad"
+    if totals["xfail"] or totals["skipped"]:
+        return "CHECK", "warn"
+    return "PASS", "ok"
+
+
 def render_html(model):
+    """Render a compact dashboard focused on target totals, test results and failures."""
     esc = html.escape
     columns = model["columns"]
     out = [HTML_HEAD]
 
-    out.append("<section><h2>Reports</h2><table><thead><tr>")
-    out.append("<th>Column</th><th>Report</th><th>Result</th></tr></thead><tbody>")
-    for column in columns:
+    # Always display the three supported targets, including targets without reports.
+    latest_by_target = {}
+    for target, series in model["by_target"].items():
+        if series:
+            latest_by_target[target] = max(series, key=run_sort_key)
+
+    out.append('<div class="targets">')
+    for target in ("saivs", "saivpp", "saivs-thrift"):
+        run = latest_by_target.get(target)
+        if run is None:
+            out.append(
+                f'<article class="target"><h2>{esc(target)}</h2>'
+                '<span class="status neutral">NO REPORT</span>'
+                '<p class="small">No XML report included</p></article>'
+            )
+            continue
+        totals = count(run)
+        status, css = _summary_status(totals)
+        total_tests = sum(totals.values())
         out.append(
-            f"<tr><td>{esc(column['label'])}</td>"
-            f"<td>{esc(column['run']['report'])}</td>"
-            f"<td>{esc(totals_text(column['totals']))}</td></tr>"
+            f'<article class="target"><h2>{esc(target)}</h2>'
+            f'<span class="status {css}">{status}</span>'
+            f'<div class="big">{totals["passed"]}<span class="small"> / {total_tests} passed</span></div>'
+            f'<div class="small">FAIL {totals["failed"]} · XFAIL {totals["xfail"]} · '
+            f'XPASS {totals["xpass"]} · SKIP {totals["skipped"]}</div>'
+            f'<div class="small">{esc(run["report"])}</div></article>'
         )
-    out.append("</tbody></table></section>")
+    out.append("</div>")
 
-    out.append("<section><h2>Results side by side</h2><table><thead><tr>")
-    out.append("<th>Test</th>")
+    out.append("<section><h2>Test results</h2><table><thead><tr><th>Test</th>")
     for column in columns:
-        out.append(f"<th>{esc(column['label'])}</th>")
+        out.append(f'<th>{esc(column["label"])}</th>')
     out.append("</tr></thead><tbody>")
-
     for group in model["row_groups"]:
         out.append(
             f'<tr class="file"><td colspan="{len(columns) + 1}">'
-            f"{esc(group['file'])}</td></tr>"
+            f'{esc(group["file"])}</td></tr>'
         )
         for test in group["tests"]:
-            out.append(f"<tr><td>{esc(test['name'])}</td>")
+            out.append(f'<tr><td>{esc(test["name"])}</td>')
             for cell in test["cells"]:
                 if cell is None:
-                    out.append('<td class="none">-</td>')
+                    out.append('<td class="none">—</td>')
                 else:
                     label = LABEL[cell["outcome"]]
                     out.append(
-                        f'<td class="{label}">{label} '
-                        f'<span class="muted">{cell["time"]:.2f}s</span></td>'
+                        f'<td class="{label}">{label}'
+                        f'<span class="small"> · {cell["time"]:.2f}s</span></td>'
                     )
             out.append("</tr>")
     out.append("</tbody></table></section>")
-
-    out.append("<section><h2>Gaps (xfail reasons)</h2>")
-    if model["gaps"]:
-        out.append("<table><thead><tr><th>Target</th><th>Test</th>")
-        out.append("<th>Reason</th><th>Source</th></tr></thead><tbody>")
-        for gap in model["gaps"]:
-            out.append(
-                f"<tr><td>{esc(gap['target'])}</td><td>{esc(gap['test'])}</td>"
-                f"<td>{esc(gap['reason'] or '(no reason given)')}</td>"
-                f"<td>{esc(gap['source'])}</td></tr>"
-            )
-        out.append("</tbody></table>")
-    else:
-        out.append("<p>None.</p>")
-    out.append("</section>")
-
-    checks = check_lines(model)
-    if checks:
-        out.append("<section><h2>Profile checks</h2>")
-        out += [f'<div class="warn">{esc(line)}</div>' for line in checks]
-        out.append("</section>")
-
-    consistency = consistency_lines(model)
-    if consistency:
-        out.append("<section><h2>Run consistency</h2>")
-        out += [f"<p>{esc(line.strip())}</p>" for line in consistency]
-        out.append("</section>")
 
     if model["failures"]:
         out.append("<section><h2>Failures</h2>")
         for failure in model["failures"]:
             out.append(
                 '<div class="failure">'
-                f"<strong>FAIL {esc(failure['column'])}: "
-                f"{esc(failure['test'])}</strong>"
-                f"<p>{esc(failure['error'])}</p></div>"
+                f'<strong>{esc(failure["column"])} · {esc(failure["test"])}</strong>'
+                f'<div>{esc(failure["error"])}</div></div>'
             )
         out.append("</section>")
 
-    out.append('<p class="muted">Generated by summarize.py</p></main></body></html>')
+    if model["gaps"]:
+        out.append("<section><h2>Known gaps (XFAIL)</h2>")
+        for gap in model["gaps"]:
+            out.append(
+                f'<div class="note"><strong>{esc(gap["target"])} · '
+                f'{esc(gap["test"])}</strong><div>'
+                f'{esc(gap["reason"] or "No reason provided")}</div></div>'
+            )
+        out.append("</section>")
+
+    checks = check_lines(model)
+    if checks:
+        out.append("<section><h2>Needs attention</h2>")
+        out += [f'<div class="note">{esc(line)}</div>' for line in checks]
+        out.append("</section>")
+
+    out.append('<footer>Generated by summarize.py</footer></main></body></html>')
     return "\n".join(out)
 
 
@@ -849,8 +904,8 @@ def model_to_json(model):
         "differs_across_runs": model["flaky"],
         "failures": model["failures"],
         "profiles": {
-            t: (None if p is None else {"path": p["path"], **{
-                "xfail": p["xfail"], "scope_gaps": p["scope_gaps"]}})
+            t: (None if p is None else {"path": p["path"], 
+                "xfail": p["xfail"], "scope_gaps": p["scope_gaps"]})
             for t, p in model["profiles"].items()
         },
     }
@@ -908,6 +963,12 @@ def main():
         action="store_true",
         help="one column per run instead of the latest run per target",
     )
+    parser.add_argument(
+        "--runs",
+        type=int,
+        metavar="N",
+        help="use only the newest N runs of each target (for example 2)",
+    )
     parser.add_argument("--md", help="also write a Markdown summary to FILE")
     parser.add_argument("--json", help="also write full data to FILE")
     parser.add_argument("--html", help="also write an HTML summary to FILE")
@@ -932,6 +993,15 @@ def main():
     if not runs:
         print("No valid XML reports found.", file=sys.stderr)
         return 2
+
+    if args.runs and args.runs > 0:
+        kept = []
+        for target in {run["target"] for run in runs}:
+            series = sorted(
+                (r for r in runs if r["target"] == target), key=run_sort_key
+            )
+            kept += series[-args.runs:]
+        runs = kept
 
     targets = sorted({run["target"] for run in runs})
     profiles = load_profiles(targets, profile_dirs(args.profiles))

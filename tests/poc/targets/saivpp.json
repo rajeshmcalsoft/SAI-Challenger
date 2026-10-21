@@ -13,6 +13,7 @@
     "test_poc_l2_vlan_invalid_id_rejected[4096]": "Target accepts VLAN ID 4096",
     "test_poc_l2_vlan_duplicate_rejected": "Duplicate VLAN returns INVALID_PARAMETER, expected ITEM_ALREADY_EXISTS",
     "test_poc_acl_match_src_ipv6": "saivpp rejects an ACL entry with a SRC_IPV6 match field (entry create returns SAI_STATUS_FAILURE). The SAI spec allows it, so this is a gap on saivpp.",
-    "test_poc_l2_vlan_duplicate_rejected": "Duplicate VLAN returns INVALID_PARAMETER, expected ITEM_ALREADY_EXISTS"
+    "test_poc_acl_entry_unknown_field_rejected": "Target accepts an ACL entry that uses a match field its table does not have (L4_SRC_PORT); the SAI spec expects it to be refused",
+    "test_poc_counters_delta": "saivpp does not update ingress port counters (all SAI_PORT_STAT_IF_IN_* stay 0) for forwarded frames; egress counters are correct"
   }
 }
