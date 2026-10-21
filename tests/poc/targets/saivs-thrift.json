@@ -1,0 +1,15 @@
+{
+  "name": "saivs-thrift",
+  "testbed": "saivs_thrift_standalone",
+  "exec_args": ["-s", "thrift"],
+  "lock": "saivs-thrift",
+  "ports": [0, 1, 2, 3, 4, 5, 6, 7],
+  "traffic_filters": [],
+  "expected_gaps": {
+    "test_poc_l3_vrf_default_admin_state": "Get of a never-set virtual router attribute returns SAI_STATUS_NOT_IMPLEMENTED",
+    "test_poc_l2_vlan_invalid_id_rejected[0]": "Target accepts VLAN ID 0",
+    "test_poc_l2_vlan_invalid_id_rejected[4095]": "Target accepts VLAN ID 4095",
+    "test_poc_l2_vlan_invalid_id_rejected[4096]": "Target accepts VLAN ID 4096",
+    "test_poc_l2_vlan_duplicate_rejected": "Duplicate VLAN returns INVALID_PARAMETER, expected ITEM_ALREADY_EXISTS"
+  }
+}
