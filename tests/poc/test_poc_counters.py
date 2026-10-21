@@ -25,7 +25,7 @@ def counter_port(request, npu):
     try:
         return request.getfixturevalue("poc_ports")[0]
     except pytest.FixtureLookupError:
-        return npu.port_oids[0]
+        return npu.port_oids[request.getfixturevalue("poc_ports")(1)[0]]
 
 
 def read_counters(npu, port):

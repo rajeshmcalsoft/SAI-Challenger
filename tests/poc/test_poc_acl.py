@@ -1,4 +1,5 @@
-"""Track C (ACL) PoC tests: Level 1 on both targets, plus the Level 2 drop test.
+"""Track C (ACL) PoC tests: Level 1 on both targets, plus the Level 2 drop and
+permit-priority tests.
 
 Built only on lib/acl.py (AclHelper) and the npu fixture. Ports come from the
 poc_ports fixture or from the named port indexes below; no fixed port numbers
@@ -7,6 +8,9 @@ inside the tests.
 No target checks (no "if saivpp"): SRC_IPV6 and DST_MAC are written to the SAI
 spec (entry create must succeed). saivpp's rejection of them is declared as an
 expected gap in tests/poc/targets/saivpp.json, not in this file.
+
+Level 2 (class TestPocAclPermitPriority) checks that a higher-priority FORWARD
+entry beats a lower-priority DROP entry for the same packet.
 
 Level 2 (class TestPocAclDrop) is the 7 Oct drop-rule experiment moved here
 with its step-by-step structure kept (see the class docstring for why). The ACL
@@ -31,8 +35,9 @@ import pytest
 # lib/ sits next to this file; make it importable when the file is run alone.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from saichallenger.common.sai_data import SaiObjType  # noqa: E402
-from lib.acl import OK, PORT_ACL_ATTR, UNBOUND, AclHelper  # noqa: E402
+from saichallenger.common.sai_data import SaiObjType
+
+from lib.acl import OK, PORT_ACL_ATTR, UNBOUND, AclHelper
 
 try:
     from ptf.testutils import send_packet, simple_tcp_packet, verify_packet
@@ -54,6 +59,12 @@ L2_SRC_MAC = "00:11:11:11:11:11"
 L2_DST_MAC = "00:22:22:22:22:22"
 UNTAGGED = "SAI_VLAN_TAGGING_MODE_UNTAGGED"
 PVID_ATTR = "SAI_PORT_ATTR_PORT_VLAN_ID"
+
+# Permit-priority test: three TCP destination ports, each tests one thing.
+PRIO_PORT = 80       # DROP (low priority) and FORWARD (high priority): permit must win
+CTRL_DROP_PORT = 81  # DROP only: proves the drop entries really work in this table
+REVERSE_PORT = 82    # FORWARD (low) and DROP (high): drop should win (info only)
+LOW_PRIO, HIGH_PRIO = 100, 200
 
 # How the drop test binds its ACL to the ingress port: "group" binds an ACL table
 # group that holds the table (what SONiC does); "table" binds the table directly.
@@ -252,8 +263,9 @@ def test_poc_acl_table_group_create_remove(npu, acl):
 def test_poc_acl_entry_unknown_field_rejected(acl):
     """An entry that matches on a field its table does not have must be refused.
     The table has only IP_PROTOCOL and L4_DST_PORT; the entry asks for
-    L4_SRC_PORT. If the target accepts it, the test stays as xfail with the
-    reason."""
+    L4_SRC_PORT. If the target accepts it, the test FAILS. Declaring that as an
+    expected gap (xfail + reason) is done in tests/poc/targets/<target>.json, not
+    here."""
     table = acl.create_table(BASIC_FIELDS)
     try:
         status, _ = acl.add_entry(table, 10, "SAI_PACKET_ACTION_DROP",
@@ -261,8 +273,7 @@ def test_poc_acl_entry_unknown_field_rejected(acl):
     except Exception as exc:                  # noqa: BLE001
         print(f"RESULT unknown_field refused with exception: {str(exc)[:120]}")
         return
-    if status == OK:
-        pytest.xfail("target accepted an ACL entry with a field its table lacks")
+    assert status != OK, "target accepted an ACL entry with a field its table lacks"
     print(f"RESULT unknown_field refused with status {status}")
 
 
@@ -288,10 +299,12 @@ def need_traffic(npu):
     assert PTF_IMPORT_ERROR is None, f"ptf.testutils not importable: {PTF_IMPORT_ERROR}"
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="class")
 def st(npu):
-    """State shared by the TestPocAclDrop steps. At the end it removes anything a
-    failed step left behind, so the switch is left as it was found."""
+    """State shared by the steps of ONE test class (TestPocAclDrop,
+    TestPocAclPermitPriority). Each class gets a fresh state and, at the end of the
+    class, anything a failed step left behind is removed, so the switch is left as
+    it was found and a failure in one class cannot break the next."""
     state = SimpleNamespace(acl=AclHelper(npu), done=set(), table=None, group=None,
                             entries=[], vlan=None, vlan_members=[],
                             default_removed=[], fdb=[], pvid_changed=[])
@@ -428,5 +441,143 @@ class TestPocAclDrop:
 
     @step("l2_removed", needs=["l2"])
     def test_poc_acl_drop_14_l2_removed_and_defaults_restored(self, npu, st):
+        problems = l2_teardown(npu, st)
+        assert not problems, problems
+
+
+class TestPocAclPermitPriority:
+    """A higher-priority permit (FORWARD) overrides a lower-priority DROP.
+
+    One ingress ACL table on port IN_IDX holds five entries (a bigger number
+    means a higher priority in SAI):
+      TCP/80  DROP    priority LOW_PRIO     TCP/80  FORWARD priority HIGH_PRIO
+      TCP/81  DROP    priority LOW_PRIO     (no permit: control, drop must work)
+      TCP/82  FORWARD priority LOW_PRIO     TCP/82  DROP    priority HIGH_PRIO
+
+    TCP/80 must come out of OUT_IDX (permit wins). TCP/81 must NOT (the drop
+    entries are live, so the TCP/80 result is not a pass by accident). TCP/82 is
+    the mirror case; its result is printed and never fails the test.
+
+    Same step-by-step structure and bind mode as TestPocAclDrop, for the same
+    reason: that structure is the one proven on saivpp.
+    """
+
+    @pytest.fixture(autouse=True)
+    def on_prev_test_failure(self):
+        """Same override as in TestPocAclDrop: the `st` fixture cleans up."""
+        yield
+
+    @pytest.mark.traffic
+    @step("l2")
+    def test_poc_acl_permit_priority_01_l2_configured(self, npu, st):
+        need_traffic(npu)
+        l2_setup(npu, st)
+
+    @pytest.mark.traffic
+    @step("baseline", needs=["l2"])
+    def test_poc_acl_permit_priority_02_baseline_all_ports_forward(
+            self, npu, dataplane, st):
+        need_traffic(npu)
+        result = {p: arrives(dataplane, p)
+                  for p in (PRIO_PORT, CTRL_DROP_PORT, REVERSE_PORT)}
+        print(f"RESULT baseline forwarded={result}")
+        assert all(result.values()), (
+            f"control check failed: TCP does not pass without an ACL: {result}")
+
+    @step("table")
+    def test_poc_acl_permit_priority_03_table_created(self, npu, st):
+        st.table = st.acl.create_table(BASIC_FIELDS)
+        assert st.table and st.table != UNBOUND, f"ACL table create returned {st.table!r}"
+
+    @step("entries", needs=["table"])
+    def test_poc_acl_permit_priority_04_entries_created(self, npu, st):
+        wanted = [
+            (LOW_PRIO, "SAI_PACKET_ACTION_DROP", PRIO_PORT),
+            (HIGH_PRIO, "SAI_PACKET_ACTION_FORWARD", PRIO_PORT),
+            (LOW_PRIO, "SAI_PACKET_ACTION_DROP", CTRL_DROP_PORT),
+            (LOW_PRIO, "SAI_PACKET_ACTION_FORWARD", REVERSE_PORT),
+            (HIGH_PRIO, "SAI_PACKET_ACTION_DROP", REVERSE_PORT),
+        ]
+        for prio, action, port in wanted:
+            status, oid = st.acl.add_entry(st.table, prio, action, tcp_match(port))
+            assert status == OK, f"{action} TCP/{port} prio {prio} create failed: {status}"
+            st.entries.append(oid)
+
+    @step("bound", needs=["entries"])
+    def test_poc_acl_permit_priority_05_bound_to_ingress_port(self, npu, st):
+        acl_oid = st.table
+        if BIND_MODE == "group":
+            st.group = st.acl.create_group(st.table)
+            acl_oid = st.group
+        st.acl.bind_to_port(acl_oid, npu.port_oids[IN_IDX])
+        print(f"RESULT acl_bound mode={BIND_MODE} to_port_index={IN_IDX}")
+
+    @pytest.mark.traffic
+    @step("permit_checked", needs=["baseline", "bound"])
+    def test_poc_acl_permit_priority_06_permit_overrides_drop(self, npu, dataplane, st):
+        need_traffic(npu)
+        got = arrives(dataplane, PRIO_PORT)
+        print(f"RESULT tcp{PRIO_PORT}_permit_wins={got}")
+        assert got, (f"TCP/{PRIO_PORT} was dropped although a higher-priority "
+                     "FORWARD entry exists")
+
+    @pytest.mark.traffic
+    @step("control_checked", needs=["baseline", "bound"])
+    def test_poc_acl_permit_priority_07_drop_without_permit_is_dropped(
+            self, npu, dataplane, st):
+        need_traffic(npu)
+        got = arrives(dataplane, CTRL_DROP_PORT)
+        print(f"RESULT tcp{CTRL_DROP_PORT}_dropped={not got}")
+        assert not got, (f"TCP/{CTRL_DROP_PORT} still came out: the DROP entries do not "
+                         "work in this table, so step 06 proves nothing")
+
+    @pytest.mark.traffic
+    @step("reverse_checked", needs=["baseline", "bound"])
+    def test_poc_acl_permit_priority_08_reverse_case_informational(
+            self, npu, dataplane, st):
+        need_traffic(npu)
+        got = arrives(dataplane, REVERSE_PORT)
+        print(f"RESULT tcp{REVERSE_PORT}_dropped={not got} "
+              "(info only; True = higher-priority DROP beat the lower FORWARD)")
+
+    @step("readback", needs=["entries"])
+    def test_poc_acl_permit_priority_09_priorities_read_back(self, npu, st):
+        low = read_attr(npu, st.entries[0], "SAI_ACL_ENTRY_ATTR_PRIORITY")
+        high = read_attr(npu, st.entries[1], "SAI_ACL_ENTRY_ATTR_PRIORITY")
+        assert (low, high) == (str(LOW_PRIO), str(HIGH_PRIO)), (
+            f"priority readback: drop={low}, permit={high}")
+
+    @step("unbound", needs=["bound"])
+    def test_poc_acl_permit_priority_10_unbound(self, npu, st):
+        st.acl.unbind_port(npu.port_oids[IN_IDX])
+
+    @step("entries_removed", needs=["entries", "unbound"])
+    def test_poc_acl_permit_priority_11_entries_removed(self, npu, st):
+        for oid in reversed(st.entries):
+            st.acl.remove_entry(oid)
+        st.entries = []
+        assert st.acl.entries == [], f"entries left behind: {st.acl.entries}"
+
+    @step("table_removed", needs=["table", "entries_removed"])
+    def test_poc_acl_permit_priority_12_table_removed(self, npu, st):
+        if st.group:
+            st.acl.remove_group()
+            st.group = None
+        st.acl.remove_table(st.table)
+        st.table = None
+        assert st.acl.tables == [], f"tables left behind: {st.acl.tables}"
+
+    @pytest.mark.traffic
+    @step("after_removal", needs=["baseline", "table_removed"])
+    def test_poc_acl_permit_priority_13_forwarding_after_acl_removed(
+            self, npu, dataplane, st):
+        need_traffic(npu)
+        result = {p: arrives(dataplane, p)
+                  for p in (PRIO_PORT, CTRL_DROP_PORT, REVERSE_PORT)}
+        print(f"RESULT after_acl_removal forwarded={result}")
+        assert all(result.values()), f"L2 forwarding broke after the ACL was removed: {result}"
+
+    @step("l2_removed", needs=["l2"])
+    def test_poc_acl_permit_priority_14_l2_removed_and_defaults_restored(self, npu, st):
         problems = l2_teardown(npu, st)
         assert not problems, problems
