@@ -1,12 +1,14 @@
-import pytest
 import time
+
+import pytest
 from sai_client.sai_redis_client.sai_redis_client import SaiRedisClient
+
 
 @pytest.fixture(scope="module", autouse=True)
 def skip_all(testbed_instance):
     testbed = testbed_instance
     if testbed is not None and len(testbed.npu) != 1:
-        pytest.skip("invalid for \"{}\" testbed".format(testbed.name))
+        pytest.skip(f"invalid for \"{testbed.name}\" testbed")
 
 
 def test_port_counters(npu):

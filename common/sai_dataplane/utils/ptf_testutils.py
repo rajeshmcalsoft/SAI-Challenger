@@ -2,10 +2,9 @@ import logging
 import sys
 
 import dpkt
+import ptf.testutils as ptfTestutils
 import saichallenger.common.sai_dataplane.utils.traffic_utils as tt
 from scapy.layers.l2 import Ether
-
-import ptf.testutils as ptfTestutils
 
 default_step = 0.2
 default_timeout = 2
@@ -79,7 +78,7 @@ class SnappiDataPlaneUtilsWrapper:
 
     def create_default_flow_name(self, port_id, packet_id):
         self._flow_name_counter += 1
-        return "flow_{}_{}_{}".format(port_id, packet_id, self._flow_name_counter)
+        return f"flow_{port_id}_{packet_id}_{self._flow_name_counter}"
 
     def add_raw_flow(self, packet, port_id, packets_count=1, flow_name=None):
 
@@ -170,7 +169,7 @@ class SnappiDataPlaneUtilsWrapper:
 
                 tt.print_pkts_side_by_side(p1, p2)
 
-                assert equal, f"Packets don't match: {str(p1)} != {str(p2)}"
+                assert equal, f"Packets don't match: {p1!s} != {p2!s}"
             i += 1
         return True
 
@@ -237,9 +236,8 @@ class SnappiDataPlaneUtilsWrapper:
 
                 tt.print_pkts_side_by_side(p1, p2)
 
-                assert equal, f"Packets don't match: {str(p1)} != {str(p2)}"
-        else:
-            assert cap_pkts, "No packets captured"
+                assert equal, f"Packets don't match: {p1!s} != {p2!s}"
+        assert cap_pkts, "No packets captured"
 
         return True
 
@@ -315,7 +313,7 @@ class SnappiDataPlaneUtilsWrapper:
 
                     tt.print_pkts_side_by_side(p1, p2)
 
-                    assert not equal, f"Packets match: {str(p1)} == {str(p2)}"
+                    assert not equal, f"Packets match: {p1!s} == {p2!s}"
 
             return True
 

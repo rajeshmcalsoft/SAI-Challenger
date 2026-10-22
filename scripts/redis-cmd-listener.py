@@ -1,14 +1,15 @@
 #!/usr/bin/env python
 
-import redis
-import time
 import json
+import logging
 import os
 import socket
 import struct
-from fcntl import ioctl
 import subprocess
-import logging
+import time
+from fcntl import ioctl
+
+import redis
 
 SIOCGIFFLAGS   = 0x8913          # get the active flag word of the device
 SIOCSIFFLAGS   = 0x8914          # set the active flag word of the device
@@ -59,7 +60,7 @@ def start_nn_agent(ifaces):
         #if not iface_is_up(iname):
         #    return None
         nn_agent_cmd.append("-i")
-        nn_agent_cmd.append("{}@{}".format(inum, iname))
+        nn_agent_cmd.append(f"{inum}@{iname}")
     logger.info(str(nn_agent_cmd))
     p = subprocess.Popen(nn_agent_cmd)
     return p

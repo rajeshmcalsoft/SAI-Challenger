@@ -1,10 +1,10 @@
 import os
-import paramiko
-import pytest
 import subprocess
 import sys
 import time
 
+import paramiko
+import pytest
 from saichallenger.common.sai_testbed import SaiTestbedMeta
 
 sys.path.insert(0, '/sai-challenger/ptf/src')
@@ -19,7 +19,7 @@ def pytest_sessionstart(session):
         patch_file = f"/sai-challenger/usecases/sai-ptf/patches/{patch_file}"
         try:
             command = ["patch", "--dry-run", "--silent", "-N", "-p1", "-i", patch_file, "-d", target_directory]
-            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             if result.returncode == 0:
                 subprocess.run(["patch", "-p1", "-i", patch_file, "-d", target_directory], check=True)
             elif result.returncode == 1:

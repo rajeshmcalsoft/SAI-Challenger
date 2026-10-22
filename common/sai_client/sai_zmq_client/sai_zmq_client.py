@@ -3,7 +3,9 @@ import os
 import socket
 import time
 
-from saichallenger.common.sai_client.sai_redis_client.sai_redis_client import SaiRedisClient
+from saichallenger.common.sai_client.sai_redis_client.sai_redis_client import (
+    SaiRedisClient,
+)
 
 
 class SaiZmqClient(SaiRedisClient):

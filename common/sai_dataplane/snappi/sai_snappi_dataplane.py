@@ -108,14 +108,14 @@ class SaiSnappiDataPlane(SaiDataPlane):
         """ Start a capture which was already configured.
         """
         capture_names = self.get_capture_port_names(self.configuration)
-        logging.info(f"Starting capture on ports {str(capture_names)}")
+        logging.info(f"Starting capture on ports {capture_names!s}")
         cs = self.api.capture_state()
         cs.state = cs.START
         self.check_warnings(self.api.set_capture_state(cs))
 
     def stop_capture(self):
         capture_names = self.get_capture_port_names(self.configuration)
-        logging.info(f"Stopping capture on ports {str(capture_names)}")
+        logging.info(f"Stopping capture on ports {capture_names!s}")
         cs = self.api.capture_state()
         cs.state = cs.STOP
         self.check_warnings(self.api.set_capture_state(cs))

@@ -1,4 +1,3 @@
-import snappi
 import time
 
 DEFAULT_STEP = 0.2

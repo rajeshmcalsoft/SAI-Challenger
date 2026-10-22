@@ -38,7 +38,9 @@ OUTPUT:
     --runs N       use only the newest N runs of each target
     --md FILE      Markdown summary
     --json FILE    full data, including untruncated errors
-    --html FILE    styled HTML report
+    --html FILE    compact HTML summary: filter buttons per target, counts
+                   per test file, report names, and a last section listing
+                   every failure, xfail and gap
 
 Examples:
     python3 summarize.py poc_shubham/reports/saivs-1016-0930.xml \\
@@ -703,6 +705,16 @@ def render_md(model):
 # HTML
 # --------------------------------------------------------------------------
 
+# SUMMARY_HTML_V2
+# Compact HTML summary: filter chips per target, one counts table per test
+# file, report names on the target cards, and a last section that lists every
+# failure, xfail and gap. No horizontal scrolling at any width.
+#
+# Combined view: when several runs of one target are shown (--all-runs), a
+# test is taken from the newest run that really executed it (a skip never
+# hides a pass or fail from another run). So the counts here can differ from
+# the per-run totals printed in the console.
+
 HTML_HEAD = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -711,152 +723,274 @@ HTML_HEAD = """<!DOCTYPE html>
 <title>SAI-Challenger | Test Summary</title>
 <style>
   * { box-sizing: border-box; }
-  body { margin: 0; padding: 22px; background: #f5f7fb; color: #1f2937;
-         font: 14px/1.45 Arial, Helvetica, sans-serif; }
-  main { max-width: 1100px; margin: 0 auto; }
-  h1 { margin: 0; font-size: 24px; color: #172554; }
-  h2 { margin: 0 0 12px; font-size: 16px; color: #243b53; }
-  .subtitle { margin: 4px 0 18px; color: #64748b; font-size: 12px; }
-  section { background: #fff; border: 1px solid #e5eaf1; border-radius: 10px;
-            padding: 15px; margin: 0 0 14px; overflow-x: auto; }
-  .targets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
-             gap: 10px; margin-bottom: 14px; }
-  .target { background: #fff; border: 1px solid #e5eaf1; border-radius: 10px;
-            padding: 13px; min-width: 0; }
-  .target h2 { margin-bottom: 6px; }
-  .big { font-size: 22px; font-weight: 700; }
-  .small { font-size: 12px; color: #64748b; }
-  .status { display: inline-block; border-radius: 5px; padding: 2px 7px;
-            font-size: 11px; font-weight: 700; }
+  html, body { margin: 0; overflow-x: hidden; }
+  body { padding: 14px; background: #f6f7fb; color: #1f2937;
+         font: 13px/1.4 system-ui, Arial, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; }
+  [hidden] { display: none !important; }
+  header { display: flex; flex-wrap: wrap; align-items: center;
+           justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+  h1 { margin: 0; font-size: 17px; color: #172554; }
+  .headline { margin: 2px 0 0; color: #64748b; font-size: 12px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .chip { border: 1px solid #cbd5e1; background: #fff; color: #334155;
+          border-radius: 999px; padding: 3px 10px; font: inherit;
+          font-size: 12px; cursor: pointer; }
+  .chip.on { background: #1e3a8a; border-color: #1e3a8a; color: #fff; }
+  .cards { display: grid; gap: 8px; margin-bottom: 10px;
+           grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+  .card, section { background: #fff; border: 1px solid #e5eaf1;
+                   border-radius: 8px; padding: 9px 11px; min-width: 0; }
+  section { margin-bottom: 10px; }
+  .card h2 { margin: 0 0 3px; font-size: 13px; display: flex;
+             justify-content: space-between; align-items: center; gap: 6px; }
+  .big { font-size: 20px; font-weight: 700; }
+  .big small { font-size: 11px; font-weight: 400; color: #64748b; }
+  .sm { font-size: 11px; color: #64748b; }
+  .rep { margin-top: 4px; font: 10.5px/1.35 ui-monospace, Consolas, monospace;
+         color: #64748b; overflow-wrap: anywhere; }
+  .rep summary { cursor: pointer; }
+  .pill { border-radius: 4px; padding: 1px 6px; font-size: 10px;
+          font-weight: 700; }
   .ok { color: #166534; background: #dcfce7; }
   .bad { color: #991b1b; background: #fee2e2; }
   .warn { color: #92400e; background: #fef3c7; }
-  .neutral { color: #475569; background: #e2e8f0; }
-  table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 8px 9px; border-bottom: 1px solid #edf0f4;
-           vertical-align: top; }
-  th { background: #f8fafc; color: #475569; font-size: 12px; }
+  .none { color: #475569; background: #e2e8f0; }
+  h3 { margin: 0 0 6px; font-size: 13px; color: #243b53; }
+  table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  th, td { text-align: left; padding: 5px 6px; vertical-align: top;
+           border-bottom: 1px solid #eef1f5; overflow-wrap: anywhere; }
+  th { font-size: 11px; color: #64748b; font-weight: 600; }
+  th:first-child { width: 40%; }
   tr:last-child td { border-bottom: 0; }
-  tr.file td { background: #f8fafc; color: #334155; font-weight: 700; }
-  td.PASS { color: #15803d; font-weight: 700; }
-  td.FAIL, td.XPASS { color: #b91c1c; font-weight: 700; }
-  td.XFAIL { color: #a16207; font-weight: 700; }
-  td.SKIP, td.none { color: #64748b; }
-  .failure { border-left: 3px solid #dc2626; background: #fff7f7;
-             padding: 9px 11px; margin: 8px 0; overflow-wrap: anywhere; }
-  .note { border-left: 3px solid #d97706; background: #fffbeb;
-          padding: 8px 10px; margin: 7px 0; overflow-wrap: anywhere; }
-  footer { color: #94a3b8; font-size: 11px; text-align: right; padding: 2px 0 10px; }
-  @media (max-width: 700px) {
-    body { padding: 12px; }
-    .targets { grid-template-columns: 1fr; }
-    section { padding: 11px; }
-    th, td { padding: 7px 6px; }
-  }
+  td.file { font: 11.5px ui-monospace, Consolas, monospace; }
+  b.p, b.f, b.x, b.s { display: inline-block; min-width: 1.7em;
+        text-align: center; border-radius: 4px; padding: 0 4px;
+        margin: 0 3px 2px 0; font-size: 11px; }
+  .p { background: #dcfce7; color: #166534; }
+  .f { background: #fee2e2; color: #991b1b; }
+  .x { background: #fef3c7; color: #92400e; }
+  .s { background: #e2e8f0; color: #475569; }
+  .legend { margin: 6px 0 0; font-size: 11px; color: #64748b; }
+  .issue { border-left: 3px solid #94a3b8; background: #f8fafc;
+           padding: 5px 8px; margin: 6px 0; overflow-wrap: anywhere; }
+  .issue.FAIL, .issue.XPASS { border-color: #dc2626; background: #fff7f7; }
+  .issue.XFAIL { border-color: #d97706; background: #fffbeb; }
+  .tag { border-radius: 4px; padding: 0 5px; font-size: 10px;
+         font-weight: 700; background: #e2e8f0; color: #334155; }
+  .issue.FAIL .tag, .issue.XPASS .tag { background: #fee2e2; color: #991b1b; }
+  .issue.XFAIL .tag { background: #fef3c7; color: #92400e; }
+  .issue code { font: 11.5px ui-monospace, Consolas, monospace; }
+  .issue p { margin: 2px 0 0; color: #475569; font-size: 12px; }
+  .issue small { color: #94a3b8; font: 10.5px ui-monospace, Consolas, monospace; }
+  footer { color: #94a3b8; font-size: 11px; text-align: right; }
 </style>
 </head>
 <body>
 <main>
-<header>
-  <h1>SAI-Challenger</h1>
-  <p class="subtitle">PoC test summary · latest run per target by default</p>
-</header>
 """
 
+HTML_SCRIPT = """<script>
+(function () {
+  var chips = document.querySelectorAll('.chip');
+  var els = document.querySelectorAll('[data-target]');
+  var count = document.getElementById('n');
+  var empty = document.getElementById('none');
+  function show(t) {
+    var n = 0;
+    chips.forEach(function (c) { c.classList.toggle('on', c.dataset.f === t); });
+    els.forEach(function (e) {
+      var hide = t !== 'all' && e.dataset.target !== t;
+      e.hidden = hide;
+      if (!hide && e.classList.contains('issue')) { n += 1; }
+    });
+    if (count) { count.textContent = n; }
+    if (empty) { empty.hidden = n > 0; }
+  }
+  chips.forEach(function (c) { c.onclick = function () { show(c.dataset.f); }; });
+  show('all');
+})();
+</script>
+"""
 
-def _summary_status(totals):
-    if totals["failed"] or totals["xpass"]:
+HTML_KNOWN_TARGETS = ("saivs", "saivs-thrift", "saivpp")
+
+
+def _combine(model):
+    """Per target: its runs and one entry per test (newest real result)."""
+    combined = {}
+    for column in model["columns"]:
+        slot = combined.setdefault(column["target"], {"runs": [], "tests": {}})
+        slot["runs"].append(column["run"])
+
+    for slot in combined.values():
+        slot["runs"].sort(key=run_sort_key)
+        for run in slot["runs"]:                      # oldest -> newest
+            for key, test in run["tests"].items():
+                old = slot["tests"].get(key)
+                if (old and test["outcome"] == "skipped"
+                        and old["outcome"] != "skipped"):
+                    continue
+                slot["tests"][key] = dict(test, report=run["report"])
+    return combined
+
+
+def _tally(tests):
+    result = dict.fromkeys(COUNT_KEYS, 0)
+    for test in tests:
+        result[test["outcome"]] += 1
+    return result
+
+
+def _chips(tally):
+    """Small coloured numbers: pass, fail (incl. strict XPASS), xfail, skip."""
+    bad = tally["failed"] + tally["xpass"]
+    parts = []
+    for number, css, tip in (
+        (tally["passed"], "p", "pass"),
+        (bad, "f", "fail"),
+        (tally["xfail"], "x", "xfail"),
+        (tally["skipped"], "s", "skip"),
+    ):
+        if number:
+            parts.append(f'<b class="{css}" title="{tip}">{number}</b>')
+    return "".join(parts) or "-"
+
+
+def _status(tally):
+    if tally["failed"] or tally["xpass"]:
         return "FAIL", "bad"
-    if totals["xfail"] or totals["skipped"]:
-        return "CHECK", "warn"
+    if tally["xfail"]:
+        return "GAPS", "warn"
     return "PASS", "ok"
 
 
-def render_html(model):
-    """Render a compact dashboard focused on target totals, test results and failures."""
-    esc = html.escape
-    columns = model["columns"]
-    out = [HTML_HEAD]
+def _issues(model, combined, order):
+    """Every failure, strict XPASS, xfail and scope gap, worst first."""
+    rank = {"FAIL": 0, "XPASS": 1, "XFAIL": 2, "GAP": 3}
+    found = []
 
-    # Always display the three supported targets, including targets without reports.
-    latest_by_target = {}
-    for target, series in model["by_target"].items():
-        if series:
-            latest_by_target[target] = max(series, key=run_sort_key)
-
-    out.append('<div class="targets">')
-    for target in ("saivs", "saivpp", "saivs-thrift"):
-        run = latest_by_target.get(target)
-        if run is None:
-            out.append(
-                f'<article class="target"><h2>{esc(target)}</h2>'
-                '<span class="status neutral">NO REPORT</span>'
-                '<p class="small">No XML report included</p></article>'
-            )
+    for target in order:
+        slot = combined.get(target)
+        if not slot:
             continue
-        totals = count(run)
-        status, css = _summary_status(totals)
-        total_tests = sum(totals.values())
+        profile = model["profiles"].get(target)
+
+        for test in slot["tests"].values():
+            outcome = test["outcome"]
+            if outcome not in ("failed", "xpass", "xfail"):
+                continue
+            declared = declared_reason(profile, test)
+            if outcome == "xfail":
+                kind = "XFAIL"
+                text = declared or short_error(test["message"]) or "no reason given"
+            else:
+                kind = "XPASS" if outcome == "xpass" else "FAIL"
+                text = short_error(test["message"]) or "no message"
+                if declared and outcome == "failed":
+                    text += f" (declared gap: {declared})"
+            found.append((rank[kind], order.index(target), kind, target,
+                          test["name"], text, test["report"]))
+
+        for item in (profile or {}).get("scope_gaps", []):
+            found.append((rank["GAP"], order.index(target), "GAP", target,
+                          "(out of scope)", item, ""))
+
+    found.sort(key=lambda row: (row[0], row[1]))
+    return found
+
+
+def render_html(model):
+    """Compact summary: cards, one counts table, issues section last."""
+    esc = html.escape
+    combined = _combine(model)
+    order = list(HTML_KNOWN_TARGETS) + sorted(
+        t for t in combined if t not in HTML_KNOWN_TARGETS)
+    reported = [t for t in order if t in combined]
+    tallies = {t: _tally(combined[t]["tests"].values()) for t in combined}
+    failing = sum(c["failed"] + c["xpass"] for c in tallies.values())
+    gaps = sum(c["xfail"] for c in tallies.values())
+    issues = _issues(model, combined, order)
+
+    out = [HTML_HEAD]
+    out.append(
+        "<header><div><h1>SAI-Challenger test summary</h1>"
+        f'<p class="headline">{len(reported)} target(s) &middot; '
+        f"{failing} failing &middot; {gaps} known gaps</p></div>"
+        '<div class="chips">'
+        + "".join(
+            f'<button class="chip" data-f="{esc(t)}">'
+            f'{"All" if t == "all" else esc(t)}</button>'
+            for t in ["all"] + order)
+        + "</div></header>"
+    )
+
+    # Target cards with their report files.
+    out.append('<div class="cards">')
+    for target in order:
+        slot = combined.get(target)
+        if slot is None:
+            out.append(
+                f'<article class="card" data-target="{esc(target)}">'
+                f'<h2>{esc(target)} <span class="pill none">NO REPORT</span></h2>'
+                '<div class="sm">No XML report included</div></article>')
+            continue
+        c = tallies[target]
+        label, css = _status(c)
+        names = [run["report"] for run in slot["runs"]]
+        if len(names) == 1:
+            rep = f'<div class="rep">{esc(names[0])}</div>'
+        else:
+            rep = (f'<details class="rep"><summary>{len(names)} reports'
+                   "</summary>" + "<br>".join(esc(n) for n in names)
+                   + "</details>")
         out.append(
-            f'<article class="target"><h2>{esc(target)}</h2>'
-            f'<span class="status {css}">{status}</span>'
-            f'<div class="big">{totals["passed"]}<span class="small"> / {total_tests} passed</span></div>'
-            f'<div class="small">FAIL {totals["failed"]} · XFAIL {totals["xfail"]} · '
-            f'XPASS {totals["xpass"]} · SKIP {totals["skipped"]}</div>'
-            f'<div class="small">{esc(run["report"])}</div></article>'
-        )
+            f'<article class="card" data-target="{esc(target)}">'
+            f'<h2>{esc(target)} <span class="pill {css}">{label}</span></h2>'
+            f'<div class="big">{c["passed"]}'
+            f'<small> / {sum(c.values())} passed</small></div>'
+            f'<div class="sm">{c["failed"] + c["xpass"]} fail &middot; '
+            f'{c["xfail"]} xfail &middot; {c["skipped"]} skip</div>'
+            f"{rep}</article>")
     out.append("</div>")
 
-    out.append("<section><h2>Test results</h2><table><thead><tr><th>Test</th>")
-    for column in columns:
-        out.append(f'<th>{esc(column["label"])}</th>')
+    # One row per test file, counts per target.
+    out.append('<section><h3>Results by test file</h3><table><thead><tr>'
+               "<th>Test file</th>")
+    for target in reported:
+        out.append(f'<th data-target="{esc(target)}">{esc(target)}</th>')
     out.append("</tr></thead><tbody>")
     for group in model["row_groups"]:
+        out.append(f'<tr><td class="file">{esc(group["file"])}</td>')
+        for target in reported:
+            subset = [t for t in combined[target]["tests"].values()
+                      if t["file"] == group["file"]]
+            out.append(f'<td data-target="{esc(target)}">'
+                       f"{_chips(_tally(subset)) if subset else '-'}</td>")
+        out.append("</tr>")
+    out.append(
+        "</tbody></table>"
+        '<p class="legend"><b class="p">n</b> pass '
+        '<b class="f">n</b> fail <b class="x">n</b> xfail '
+        '<b class="s">n</b> skip</p></section>')
+
+    # Last section, only when there is something to show.
+    if issues:
         out.append(
-            f'<tr class="file"><td colspan="{len(columns) + 1}">'
-            f'{esc(group["file"])}</td></tr>'
-        )
-        for test in group["tests"]:
-            out.append(f'<tr><td>{esc(test["name"])}</td>')
-            for cell in test["cells"]:
-                if cell is None:
-                    out.append('<td class="none">—</td>')
-                else:
-                    label = LABEL[cell["outcome"]]
-                    out.append(
-                        f'<td class="{label}">{label}'
-                        f'<span class="small"> · {cell["time"]:.2f}s</span></td>'
-                    )
-            out.append("</tr>")
-    out.append("</tbody></table></section>")
-
-    if model["failures"]:
-        out.append("<section><h2>Failures</h2>")
-        for failure in model["failures"]:
+            '<section><h3>Failures, xfail and gaps '
+            '(<span id="n">%d</span>)</h3>' % len(issues))
+        for _, _, kind, target, name, text, report in issues:
+            where = f" <small>{esc(report)}</small>" if report else ""
             out.append(
-                '<div class="failure">'
-                f'<strong>{esc(failure["column"])} · {esc(failure["test"])}</strong>'
-                f'<div>{esc(failure["error"])}</div></div>'
-            )
-        out.append("</section>")
+                f'<div class="issue {kind}" data-target="{esc(target)}">'
+                f'<span class="tag">{kind}</span> <b>{esc(target)}</b> '
+                f"<code>{esc(name)}</code><p>{esc(text)}{where}</p></div>")
+        out.append('<p class="sm" id="none" hidden>Nothing for this target.</p>'
+                   "</section>")
 
-    if model["gaps"]:
-        out.append("<section><h2>Known gaps (XFAIL)</h2>")
-        for gap in model["gaps"]:
-            out.append(
-                f'<div class="note"><strong>{esc(gap["target"])} · '
-                f'{esc(gap["test"])}</strong><div>'
-                f'{esc(gap["reason"] or "No reason provided")}</div></div>'
-            )
-        out.append("</section>")
-
-    checks = check_lines(model)
-    if checks:
-        out.append("<section><h2>Needs attention</h2>")
-        out += [f'<div class="note">{esc(line)}</div>' for line in checks]
-        out.append("</section>")
-
-    out.append('<footer>Generated by summarize.py</footer></main></body></html>')
+    out.append("<footer>Generated by summarize.py</footer></main>")
+    out.append(HTML_SCRIPT)
+    out.append("</body></html>")
     return "\n".join(out)
 
 
@@ -904,7 +1038,7 @@ def model_to_json(model):
         "differs_across_runs": model["flaky"],
         "failures": model["failures"],
         "profiles": {
-            t: (None if p is None else {"path": p["path"], 
+            t: (None if p is None else {"path": p["path"],
                 "xfail": p["xfail"], "scope_gaps": p["scope_gaps"]})
             for t, p in model["profiles"].items()
         },

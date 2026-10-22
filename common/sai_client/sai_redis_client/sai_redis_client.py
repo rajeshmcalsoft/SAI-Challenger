@@ -1,10 +1,9 @@
 import json
-import redis
 import time
-import os
 
+import redis
 from saichallenger.common.sai_client.sai_client import SaiClient
-from saichallenger.common.sai_data import SaiObjType, SaiData
+from saichallenger.common.sai_data import SaiData, SaiObjType
 
 SAI_COUNTER_TYPE_TO_ID_LIST = {
     "SAI_PORT_STAT": "PORT_COUNTER_ID_LIST",
@@ -40,8 +39,8 @@ class SaiRedisClient(SaiClient):
         self.port = cfg["port"]
         self.libsaivs = cfg["saivs"]
         self.asic_channel = None
-        self.asic_db = 9 if cfg["asic_type"] is "phy" else 1
-        self.restart_query = "GB_ASIC_DB_RESTARTQUERY" if cfg["asic_type"] is "phy" else "RESTARTQUERY"
+        self.asic_db = 9 if cfg["asic_type"] == "phy" else 1
+        self.restart_query = "GB_ASIC_DB_RESTARTQUERY" if cfg["asic_type"] == "phy" else "RESTARTQUERY"
 
         self.is_dut_mbr = cfg.get("mode") is not None
 

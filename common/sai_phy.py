@@ -1,4 +1,5 @@
 import json
+
 from saichallenger.common.sai import Sai
 from saichallenger.common.sai_data import SaiObjType
 

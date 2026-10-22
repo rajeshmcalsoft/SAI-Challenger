@@ -18,15 +18,16 @@ STATS = [
 ]
 RETRIES = 3     # a stray control packet can land between clear and read
 
-
 @pytest.fixture
-def counter_port(request, npu):
-    """Port from poc_ports when that fixture exists, else the first port."""
-    try:
-        return request.getfixturevalue("poc_ports")[0]
-    except pytest.FixtureLookupError:
-        return npu.port_oids[request.getfixturevalue("poc_ports")(1)[0]]
+def counter_port(npu):
+    """Return the first available port OID."""
+    if not npu.port_oids:
+        pytest.skip("No port OIDs available")
 
+    if isinstance(npu.port_oids, dict):
+        return next(iter(npu.port_oids.values()))
+
+    return npu.port_oids[0]
 
 def read_counters(npu, port):
     """Return {stat_name: int} for STATS."""
@@ -58,4 +59,3 @@ def test_poc_counters_clear_read(npu, counter_port):
             break
 
     assert not any(after.values()), f"counters not zero after clear: {after}"
-

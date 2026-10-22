@@ -1,4 +1,5 @@
 import json
+
 from aenum import Enum, extend_enum
 
 
@@ -25,6 +26,7 @@ class SaiObjType(Enum):
 
         try:
             import re
+
             from sai_thrift import sai_headers
         except:
             return
@@ -61,7 +63,7 @@ class SaiObjType(Enum):
         try:
             with open("/etc/sai/sai.json", "r") as f:
                 sai_json = json.loads(f.read())
-        except IOError:
+        except OSError:
             assert False, "Failed to locate `sai.json` file"
 
         for item in sai_json:

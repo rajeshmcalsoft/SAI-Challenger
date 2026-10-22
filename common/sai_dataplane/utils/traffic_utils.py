@@ -1,5 +1,6 @@
-import time
 import ipaddress
+import time
+
 import macaddress
 
 default_step = 0.2
@@ -28,7 +29,7 @@ def print_pkts_side_by_side(p1, p2):
     bex = bytes(p1)
     rxl = len(p2)
     brx = bytes(p2)
-    maxlen = rxl if rxl > exl else exl
+    maxlen = max(exl, rxl)
 
     print("Byte#\t Exp \t Eq?\t Rx\n")
     for i in range(maxlen):
@@ -94,7 +95,7 @@ def compare_pkts2(pkt1, pkt2):
     bex = bytes(p1)
     rxl = len(p2)
     brx = bytes(p2)
-    maxlen = rxl if rxl > exl else exl
+    maxlen = max(exl, rxl)
 
     for i in range(maxlen - 4):
         if bex[i] != brx[i]:

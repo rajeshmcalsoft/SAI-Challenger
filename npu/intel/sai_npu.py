@@ -1,4 +1,3 @@
-import time
 from saichallenger.common.sai_npu import SaiNpu
 
 

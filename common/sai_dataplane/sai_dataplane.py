@@ -1,4 +1,4 @@
-class SaiDataPlane():
+class SaiDataPlane:
     """
     Base class for SAI dataplane implementations.
 
@@ -13,25 +13,21 @@ class SaiDataPlane():
         """
         per session init
         """
-        pass
 
     def deinit(self):
         """
         per session deinit
         """
-        pass
 
     def setup(self):
         """
         per testcase setup
         """
-        pass
 
     def teardown(self):
         """
         per testcase teardown
         """
-        pass
 
     @staticmethod
     def spawn(params) -> 'SaiDataPlane':

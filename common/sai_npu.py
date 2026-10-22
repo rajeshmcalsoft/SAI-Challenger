@@ -2,7 +2,7 @@ import json
 import time
 
 from saichallenger.common.sai import Sai
-from saichallenger.common.sai_data import SaiData, SaiObjType
+from saichallenger.common.sai_data import SaiObjType
 from saichallenger.common.sai_dataplane.sai_hostif_dataplane import SaiHostifDataPlane
 
 
@@ -225,7 +225,7 @@ class SaiNpu(Sai):
             return None
 
         for inum, iname in ifaces.items():
-            socket_addr = 'tcp://{}:10001'.format(self.sai_client.server_ip)
+            socket_addr = f'tcp://{self.sai_client.server_ip}:10001'
             self.hostif_map[(0, int(inum))] = socket_addr
             assert self.remote_iface_is_up(iname), f"Interface {iname} must be up before dataplane init."
 

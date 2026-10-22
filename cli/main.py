@@ -1,18 +1,15 @@
 #!/usr/bin/python3
 
-import click
 import json
 import os
 import shutil
 
-from saichallenger.common.sai_data import SaiObjType
-from saichallenger.common.sai import Sai
-from saichallenger.common.sai_npu import SaiNpu
-from saichallenger.common.sai_testbed import SaiTestbedMeta
-from saichallenger.common.sai_testbed import SaiTestbed
-
+import click
 from sai_client.sai_redis_client.sai_redis_client import SaiRedisClient
-
+from saichallenger.common.sai import Sai
+from saichallenger.common.sai_data import SaiObjType
+from saichallenger.common.sai_npu import SaiNpu
+from saichallenger.common.sai_testbed import SaiTestbed, SaiTestbedMeta
 
 VERSION = '0.1'
 
@@ -51,7 +48,6 @@ def cli():
 @cli.group()
 def testbed():
     """Manage SAI testbed"""
-    pass
 
 
 # 'testbed set' command
@@ -111,7 +107,7 @@ def info():
         return False
 
     testbed = cfg.get("testbed", "undefined")
-    click.echo("SAI testbed name:      {}".format(testbed))
+    click.echo(f"SAI testbed name:      {testbed}")
     if testbed == "undefined":
         click.echo()
         return False
@@ -129,7 +125,7 @@ def info():
         click.echo()
         return True
 
-    click.echo("Active target type:    {}".format(target_type))
+    click.echo(f"Active target type:    {target_type}")
     click.echo("Active target name:    {}".format(cfg[0]["alias"]))
     click.echo("Active target API:     {}".format(cfg[0]["client"]["type"]))
     click.echo("Active target IP:      {}".format(cfg[0]["client"]["config"]["ip"]))
@@ -149,13 +145,12 @@ def init():
         return False
 
     testbed.init()
-    click.echo("The testbed \"{}\" initialization completed!\n".format(testbed.name))
+    click.echo(f"The testbed \"{testbed.name}\" initialization completed!\n")
 
 
 @cli.group()
 def dut():
     """Manage SAI DUT"""
-    pass
 
 
 # DUT 'init' command
@@ -215,7 +210,7 @@ def init():
     sai.reset()
     asic = sai.cfg.get("asic", "generic SAI switch")
     target = sai.cfg.get("target", "generic target")
-    click.echo("Initialized {} on {}\n".format(asic, target))
+    click.echo(f"Initialized {asic} on {target}\n")
 
 
 # 'get' command
@@ -236,7 +231,7 @@ def get(oid, attrs):
     for attr in attrs:
         attr_type = sai.get_obj_attr_type(obj_type, attr)
         if attr_type is None:
-            click.echo("Unknown SAI object's attribute {}\n".format(attr))
+            click.echo(f"Unknown SAI object's attribute {attr}\n")
             return False
 
         status, data = sai.get_by_type(oid, attr, attr_type, False)
@@ -245,7 +240,7 @@ def get(oid, attrs):
             return False
 
         data = data.to_json()
-        click.echo("{:<48} {}".format(data[0], data[1]))
+        click.echo(f"{data[0]:<48} {data[1]}")
 
     click.echo()
 
@@ -264,7 +259,7 @@ def set(oid, attr, value):
         return False
 
     if not attr.startswith("SAI_"):
-        click.echo("Invalid SAI object's attribute {} provided\n".format(attr))
+        click.echo(f"Invalid SAI object's attribute {attr} provided\n")
         return False
 
     sai = get_sai_entity()
@@ -284,17 +279,17 @@ def create(obj_type, attrs):
     try:
         obj_type = SaiObjType[obj_type]
     except KeyError:
-        click.echo("Unknown SAI object type '{}'\n".format(obj_type))
+        click.echo(f"Unknown SAI object type '{obj_type}'\n")
         return False
 
     if len(attrs) % 2 != 0:
-        click.echo("Invalid SAI object's attributes {} provided\n".format(attrs))
+        click.echo(f"Invalid SAI object's attributes {attrs} provided\n")
         return False
 
     sai = get_sai_entity()
     status, oid = sai.create(obj_type, attrs, False)
     if status == "SAI_STATUS_SUCCESS":
-        click.echo("Created SAI object {} with {}\n".format(obj_type.name, oid))
+        click.echo(f"Created SAI object {obj_type.name} with {oid}\n")
     else:
         click.echo(status + '\n')
 
@@ -333,7 +328,7 @@ def list(obj_type):
         obj_type = SaiObjType[obj_type]
     except KeyError:
         if obj_type != "ALL":
-            click.echo("Unknown SAI object type '{}'\n".format(obj_type))
+            click.echo(f"Unknown SAI object type '{obj_type}'\n")
             return False
         obj_type = None
 
@@ -343,7 +338,7 @@ def list(obj_type):
     for key, oids in oids.items():
         click.echo(key)
         for idx, oid in enumerate(oids):
-            click.echo("{:>8})  {}".format(idx + 1, oid))
+            click.echo(f"{idx + 1:>8})  {oid}")
         click.echo()
 
 
@@ -365,7 +360,7 @@ def dump(oid):
         status, data = sai.get_by_type(oid, attr['name'], attr['properties']['type'], False)
         if status == "SAI_STATUS_SUCCESS":
             data = data.to_json()
-            click.echo("{:<50} {}".format(data[0], data[1]))
+            click.echo(f"{data[0]:<50} {data[1]}")
         else:
             click.echo("{:<50} {}".format(attr['name'], status))
     click.echo()
@@ -374,7 +369,6 @@ def dump(oid):
 @cli.group()
 def stats():
     """Manage SAI object's stats"""
-    pass
 
 
 # 'stats get' command
@@ -403,7 +397,7 @@ def get(oid, cntrs):
 
     data = data.counters()
     for cntr in cntrs:
-        click.echo("{:<48} {:>8}".format(cntr, data[cntr]))
+        click.echo(f"{cntr:<48} {data[cntr]:>8}")
     click.echo()
 
 
@@ -445,7 +439,6 @@ def counter(ctx):
 @counter.group()
 def group():
     """Manage Redis flex counters groups"""
-    pass
 
 
 def _parse_clear_on_read(val):
@@ -489,8 +482,8 @@ def _parse_flex_counter_group_attrs(attrs):
             kwargs["enable"] = _parse_flex_counter_enable(val)
         else:
             raise ValueError(
-                "Unknown flex counter group key {!r}; use POLL_INTERVAL, "
-                "STATS_MODE or FLEX_COUNTER_STATUS".format(key)
+                f"Unknown flex counter group key {key!r}; use POLL_INTERVAL, "
+                "STATS_MODE or FLEX_COUNTER_STATUS"
             )
     return kwargs
 
@@ -519,7 +512,7 @@ def set(group_name, attrs):
         return False
 
     if status == "SAI_STATUS_SUCCESS":
-        click.echo("Created/Updated flex counter group {}\n".format(group_name))
+        click.echo(f"Created/Updated flex counter group {group_name}\n")
     else:
         click.echo(status + '\n')
 
@@ -535,7 +528,7 @@ def delete(group_name):
     sai = get_sai_entity()
     status = sai.del_flex_counter_group(group_name, False)
     if status == "SAI_STATUS_SUCCESS":
-        click.echo("Deleted group name {}\n".format(group_name))
+        click.echo(f"Deleted group name {group_name}\n")
     else:
         click.echo(status + '\n')
 
@@ -543,7 +536,6 @@ def delete(group_name):
 @counter.group()
 def poll():
     """Manage Redis flex counters poll"""
-    pass
 
 
 # 'counter poll start' command
@@ -562,7 +554,7 @@ def start(group_name, oid, cntrs):
 
     counters = [c.strip() for c in cntrs.split(",") if c.strip()]
     if not counters:
-        click.echo("No counter names in {!r}\n".format(cntrs))
+        click.echo(f"No counter names in {cntrs!r}\n")
         return False
 
     sai = get_sai_entity()
@@ -578,7 +570,7 @@ def start(group_name, oid, cntrs):
         return False
 
     if status == "SAI_STATUS_SUCCESS":
-        click.echo("Started polling counters for {}:{}\n".format(group_name, oid))
+        click.echo(f"Started polling counters for {group_name}:{oid}\n")
     else:
         click.echo(status + '\n')
 
@@ -604,7 +596,7 @@ def stop(group_name, oid):
         return False
 
     if status == "SAI_STATUS_SUCCESS":
-        click.echo("Stopped polling for {}:{}\n".format(group_name, oid))
+        click.echo(f"Stopped polling for {group_name}:{oid}\n")
     else:
         click.echo(status + '\n')
 
@@ -623,12 +615,12 @@ def get(oid, cntrs):
     sai = get_sai_entity()
     exists, data = sai.get_flex_counter(oid, cntrs)
     if not exists:
-        click.echo("Counter {} doesn't exist".format(oid))
+        click.echo(f"Counter {oid} doesn't exist")
         return False
 
     for cntr, value in data.items():
         value = value if value is not None else "[missing]"
-        click.echo("{:<48} {:>8}".format(cntr, value))
+        click.echo(f"{cntr:<48} {value:>8}")
 
     click.echo()
 
@@ -647,17 +639,17 @@ def delete(oid):
     exists = sai.del_flex_counter(oid)
 
     if not exists:
-        click.echo("Counter:{} doesn't exist".format(oid))
+        click.echo(f"Counter:{oid} doesn't exist")
         return False
     
-    click.echo("Counter {} was deleted from COUNTERS_DB".format(oid))
+    click.echo(f"Counter {oid} was deleted from COUNTERS_DB")
 
 
 # 'version' subcommand
 @cli.command()
 def version():
     """Display version info"""
-    click.echo("SAI CLI version {0}".format(VERSION))
+    click.echo(f"SAI CLI version {VERSION}")
 
 
 if __name__ == "__main__":

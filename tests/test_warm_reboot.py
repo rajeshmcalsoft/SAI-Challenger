@@ -1,15 +1,14 @@
 import pytest
-from saichallenger.common.sai_data import SaiObjType
+from ptf.testutils import send_packet, simple_tcp_packet, verify_packets
 from sai_client.sai_redis_client.sai_redis_client import SaiRedisClient
-
-from ptf.testutils import simple_tcp_packet, send_packet, verify_packets
+from saichallenger.common.sai_data import SaiObjType
 
 
 @pytest.fixture(scope="module", autouse=True)
 def skip_all(testbed_instance, npu):
     testbed = testbed_instance
     if testbed is not None and len(testbed.npu) != 1:
-        pytest.skip("invalid for \"{}\" testbed".format(testbed.name))
+        pytest.skip(f"invalid for \"{testbed.name}\" testbed")
 
     if not isinstance(npu.sai_client, SaiRedisClient):
         pytest.skip("Warm boot logic is not implemented for non-redis SAI client")

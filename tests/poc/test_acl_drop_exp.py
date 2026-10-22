@@ -51,9 +51,8 @@ TEST_DIR = os.path.dirname(os.path.abspath(__file__))
 if TEST_DIR not in sys.path:
     sys.path.insert(0, TEST_DIR)
 
-from saichallenger.common.sai_data import SaiObjType
-
 from lib.acl import AclHelper
+from saichallenger.common.sai_data import SaiObjType
 
 try:
     from ptf.testutils import send_packet, simple_tcp_packet, verify_packet

@@ -1,6 +1,6 @@
 import pytest
-from saichallenger.common.sai_data import SaiObjType
 from saichallenger.common.sai import Sai
+from saichallenger.common.sai_data import SaiObjType
 
 port_attrs = Sai.get_obj_attrs(SaiObjType.PORT)
 port_attrs_default = {}
@@ -11,7 +11,7 @@ port_attrs_updated = {}
 def skip_all(testbed_instance):
     testbed = testbed_instance
     if testbed is not None and len(testbed.phy) != 1:
-        pytest.skip("invalid for \"{}\" testbed".format(testbed.name))
+        pytest.skip(f"invalid for \"{testbed.name}\" testbed")
 
 
 @pytest.fixture(scope="module")

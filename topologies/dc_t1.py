@@ -1,7 +1,7 @@
 from contextlib import contextmanager
-import pytest
+
 #from sai_data import SaiObjType
-from saichallenger.common.sai_data import SaiData, SaiObjType
+from saichallenger.common.sai_data import SaiObjType
 
 
 @contextmanager

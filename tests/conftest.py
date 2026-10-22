@@ -1,12 +1,11 @@
 import os
+
 import pytest
 
 curdir = os.path.dirname(os.path.realpath(__file__))
 
-from saichallenger.common.sai_npu import SaiNpu
-from saichallenger.common.sai_phy import SaiPhy
-from saichallenger.common.sai_testbed import SaiTestbed
 from saichallenger.common.sai_data import SaiObjType
+from saichallenger.common.sai_testbed import SaiTestbed
 
 _previous_test_failed = False
 

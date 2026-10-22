@@ -1,15 +1,23 @@
 import ipaddress
-import pytest
 import time
+
+import pytest
+from ptf.testutils import (
+    send_packet,
+    simple_tcp_packet,
+    verify_any_packet_any_port,
+    verify_no_packet,
+    verify_packet,
+    verify_packets,
+)
 from saichallenger.common.sai_data import SaiObjType
-from ptf.testutils import simple_tcp_packet, send_packet, verify_packets, verify_packet, verify_no_packet_any, verify_no_packet, verify_any_packet_any_port
 
 
 @pytest.fixture(scope="module", autouse=True)
 def skip_all(testbed_instance):
     testbed = testbed_instance
     if testbed is not None and len(testbed.npu) != 1:
-        pytest.skip("invalid for \"{}\" testbed".format(testbed.name))
+        pytest.skip(f"invalid for \"{testbed.name}\" testbed")
 
 @pytest.fixture(autouse=True)
 def on_prev_test_failure(prev_test_failed, npu):
@@ -319,7 +327,7 @@ def test_l2_lag(npu, dataplane):
             count = [0, 0, 0]
             dst_ip = ipaddress.IPv4Address('10.10.10.1')
             max_itrs = 200
-            for i in range(0, max_itrs):
+            for i in range(max_itrs):
                 pkt = simple_tcp_packet(eth_dst=macs[0],
                                         eth_src=macs[1],
                                         ip_dst=str(dst_ip),
@@ -332,7 +340,7 @@ def test_l2_lag(npu, dataplane):
                 count[rcv_idx] += 1
                 dst_ip += 1
 
-            for i in range(0, 3):
+            for i in range(3):
                 assert(count[i] >= ((max_itrs / 3) * 0.8))
 
             pkt = simple_tcp_packet(eth_src=macs[0],
@@ -455,7 +463,7 @@ def test_l2_lag_hash_seed(npu, dataplane):
             max_itrs = 101
 
             # Sending 100 packets to verify the order/sequence of distribution
-            for i in range(0, max_itrs):
+            for i in range(max_itrs):
                 src_mac = src_mac_start + str(i % 99).zfill(2)
                 ip_src = ip_src_start + str(i % 99)
                 ip_dst = ip_dst_start + str(i % 99)   
@@ -497,7 +505,7 @@ def test_l2_lag_hash_seed(npu, dataplane):
             sport = 0x1234
             
             # Sending 100 packets to verify the order/sequence of distribution
-            for i in range(0, max_itrs):
+            for i in range(max_itrs):
                 src_mac = src_mac_start + str(i % 99).zfill(2)
                 ip_src = ip_src_start + str(i % 99)
                 ip_dst = ip_dst_start + str(i % 99)
@@ -528,7 +536,7 @@ def test_l2_lag_hash_seed(npu, dataplane):
                 dport += 1
             
             order_check = 0		
-            for i in range(0, max_itrs):
+            for i in range(max_itrs):
                 if(laglist1[i] != laglist2[i]):
                     order_check += 1
             

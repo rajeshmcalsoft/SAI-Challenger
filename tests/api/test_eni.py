@@ -2,11 +2,12 @@ from pprint import pprint
 
 import pytest
 
+
 @pytest.fixture(scope="module", autouse=True)
 def skip_all(testbed_instance):
     testbed = testbed_instance
     if testbed is not None and len(testbed.dpu) != 1:
-        pytest.skip("invalid for \"{}\" testbed".format(testbed.name))
+        pytest.skip(f"invalid for \"{testbed.name}\" testbed")
 
 @pytest.mark.dpu
 class TestSaiEni:

@@ -5,7 +5,7 @@ import pytest
 def skip_all(testbed_instance):
     testbed = testbed_instance
     if testbed is not None and len(testbed.npu) != 1:
-        pytest.skip("invalid for \"{}\" testbed".format(testbed.name))
+        pytest.skip(f"invalid for \"{testbed.name}\" testbed")
 
 
 def test_stats(npu, dataplane):
@@ -31,7 +31,7 @@ def test_stats(npu, dataplane):
                           ]).counters()
 
     for cntr_id in cntrs:
-        assert cntrs[cntr_id] == 0, "{} is not 0".format(cntr_id)
+        assert cntrs[cntr_id] == 0, f"{cntr_id} is not 0"
 
     queue_oids = npu.get_list(port_oids[0], "SAI_PORT_ATTR_QOS_QUEUE_LIST", "oid:0x0")
     assert len(queue_oids) > 0
@@ -44,5 +44,5 @@ def test_stats(npu, dataplane):
                                   'SAI_QUEUE_STAT_BYTES', ''
                               ]).counters()
         for cntr_id in cntrs:
-            assert cntrs[cntr_id] == 0, "{} is not 0".format(cntr_id)
+            assert cntrs[cntr_id] == 0, f"{cntr_id} is not 0"
 

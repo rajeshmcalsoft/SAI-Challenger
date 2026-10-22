@@ -1,4 +1,5 @@
 import itertools
+
 import pytest
 from saichallenger.common.sai import Sai
 
@@ -9,7 +10,7 @@ switch_attrs = Sai.get_obj_attrs("SAI_OBJECT_TYPE_SWITCH")
 def skip_all(testbed_instance):
     testbed = testbed_instance
     if testbed is not None and len(testbed.npu) != 1:
-        pytest.skip("invalid for \"{}\" testbed".format(testbed.name))
+        pytest.skip(f"invalid for \"{testbed.name}\" testbed")
 
 
 class TestSwitch:
@@ -85,7 +86,7 @@ class TestSwitch:
         if attr_value is None:
             attr_value = self.state.get(attr)
             if attr_value is None:
-                pytest.skip("No default value for attribute {}".format(attr))
+                pytest.skip(f"No default value for attribute {attr}")
         status = npu.set(npu.switch_oid, [attr, attr_value], False)
         npu.assert_status_success(status)
         assert npu.get(npu.switch_oid, [attr]).value() == attr_value

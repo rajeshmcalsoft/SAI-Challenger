@@ -1,17 +1,17 @@
-import re
-from itertools import zip_longest
 import ipaddress
 import json
-from sai_thrift import sai_headers
-from sai_thrift.ttypes import *
-from sai_thrift import ttypes
-from sai_thrift.sai_headers import *
-from sai_thrift.sai_adapter import *
+import re
+from itertools import zip_longest
+
 import sai_thrift.sai_adapter as adapter
+from sai_thrift import sai_headers, ttypes
+from sai_thrift.sai_adapter import *
+from sai_thrift.sai_headers import *
+from sai_thrift.ttypes import *
 from saichallenger.common.sai_data import SaiObjType, SaiStatus
 
 
-class ThriftConverter():
+class ThriftConverter:
     def convert_attributes_to_thrift(attributes):
         """
         [ "SAI_SWITCH_ATTR_PORT_LIST", "2:oid:0x0,oid:0x0" ] => { "port_list": sai_thrift_object_list_t(count=2, idlist=[0x0, 0x0]) }
@@ -75,7 +75,7 @@ class ThriftConverter():
         [ 'SAI_PORT_STAT_IF_IN_OCTETS', '', 'SAI_PORT_STAT_IF_IN_UCAST_PKTS', '' ] =>  [SAI_PORT_STAT_IF_IN_OCTETS,SAI_PORT_STAT_IF_IN_UCAST_PKTS]
         """
         cnts_list = []
-        id_dict_name = "sai_get_{}_stats_counter_ids_dict".format(obj_type_name)
+        id_dict_name = f"sai_get_{obj_type_name}_stats_counter_ids_dict"
         id_dict = getattr(adapter, id_dict_name)        
         reverse_id_dict = {v: k for k, v in id_dict.items()}
         for counter_id in counter_ids:
@@ -84,7 +84,7 @@ class ThriftConverter():
             if counter_id in reverse_id_dict:
                 cnts_list.append(reverse_id_dict[counter_id])
             else:
-                raise ValueError("Counter id {} is not supported for {}".format(counter_id, obj_type_name))
+                raise ValueError(f"Counter id {counter_id} is not supported for {obj_type_name}")
         return cnts_list
 
     @staticmethod
@@ -184,9 +184,7 @@ class ThriftConverter():
         """
         if attr_name == 'SAI_FDB_FLUSH_ATTR_ENTRY_TYPE':
             return "s32"
-        elif attr_name == 'SAI_FDB_FLUSH_ATTR_BRIDGE_PORT_ID':
-            return "oid"
-        elif attr_name == 'SAI_FDB_FLUSH_ATTR_BV_ID':
+        elif attr_name == 'SAI_FDB_FLUSH_ATTR_BRIDGE_PORT_ID' or attr_name == 'SAI_FDB_FLUSH_ATTR_BV_ID':
             return "oid"
         return ThriftConverter.sai_metadata.get(attr_name)
 
@@ -208,7 +206,7 @@ class ThriftConverter():
         splitted = value_data.split(':', 1)
         count = int(splitted[0])
         thrift_list = [ ThriftConverter.get_enum_by_str(item) for item in splitted[1].split(',') ]
-        sai_thrift_class = getattr(ttypes, 'sai_thrift_{}_list_t'.format(value_type[:-4]))
+        sai_thrift_class = getattr(ttypes, f'sai_thrift_{value_type[:-4]}_list_t')
         return sai_thrift_class(count, thrift_list)
 
     @staticmethod
@@ -217,7 +215,7 @@ class ThriftConverter():
         "1,7" => sai_thrift_{}_range_t(min=1, max=7)
         """
         splitted = range.split(',')
-        sai_thrift_class = getattr(ttypes, 'sai_thrift_{}_range_t'.format(value_type[:-5]))
+        sai_thrift_class = getattr(ttypes, f'sai_thrift_{value_type[:-5]}_range_t')
         return sai_thrift_class(min=int(splitted[0]), max=int(splitted[1]))
 
     @staticmethod
@@ -415,7 +413,7 @@ class ThriftConverter():
         if thrift_spec is None:
             return "oid"
 
-        attribute_value_spec = getattr(ttypes, f'sai_thrift_attribute_value_t').thrift_spec
+        attribute_value_spec = ttypes.sai_thrift_attribute_value_t.thrift_spec
         for spec in attribute_value_spec[1:]:
             if spec[3] == thrift_spec:
                 return spec[2]
@@ -463,9 +461,7 @@ class ThriftConverter():
             return ThriftConverter.from_sai_acl_resource(value_type, value, attr_name, obj_type)
         elif value_type in [ 'sysportconfiglist' ]:
             return ThriftConverter.from_sai_sysport_config_list(value_type, value, attr_name, obj_type)
-        elif value_type in [ 'aclaction' ]:
-            raise NotImplementedError(f"{value_type}, {value}")
-        elif value_type in [ 'aclfield' ]:
+        elif value_type in [ 'aclaction' ] or value_type in [ 'aclfield' ]:
             raise NotImplementedError(f"{value_type}, {value}")
         elif value_type in [ 'ipaddr' ]:
             return ThriftConverter.from_sai_ip_address(value)
@@ -508,8 +504,8 @@ class ThriftConverter():
         """
         sai_thrift_s32_list_t(count=1, int32list=[0, 1] => "false:1:0"
         """
-        is_action_list_mandatory = getattr(object_list, 'is_action_list_mandatory')
-        action_list = getattr(object_list, 'action_list')
+        is_action_list_mandatory = object_list.is_action_list_mandatory
+        action_list = object_list.action_list
         listvar = ThriftConverter.from_sai_int_list('s32list', action_list, 'SAI_ACL_TABLE_ATTR_ACL_ACTION_TYPE_LIST', 'SAI_OBJECT_TYPE_ACL_TABLE')
         return f'{is_action_list_mandatory}'.lower() + ':' + listvar
 
@@ -621,7 +617,7 @@ class ThriftConverter():
         try:
             with open("/etc/sai/sai.json", "r") as f:
                 sai_json = json.loads(f.read())
-        except IOError:
+        except OSError:
             return None
 
         if isinstance(obj_type, SaiObjType):
@@ -686,17 +682,17 @@ class ThriftConverter():
 
     @staticmethod
     def generate_metadata():
-        import subprocess
         import glob
+        import subprocess
 
         # Search for thrift adapter
         sai_thrift_adapter = glob.glob("/usr/local/lib/**/sai_adapter.py", recursive=True)[0]
 
         # Get attributes from thrift adapter
         cmd = f"cat {sai_thrift_adapter}"
-        cmd += " | grep -e 'attrs\[\"SAI_.*'"
-        cmd += " | sed 's/ attrs\[//' "
-        cmd += " | sed 's/\] = attr\\.value\\./: \"/'"
+        cmd += " | grep -e 'attrs\\[\"SAI_.*'"
+        cmd += r" | sed 's/ attrs\[//' "
+        cmd += " | sed 's/\\] = attr\\.value\\./: \"/'"
         cmd += " | sed 's/$/\",/'"
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
         assert result.returncode == 0, "Metadata generation failed!"

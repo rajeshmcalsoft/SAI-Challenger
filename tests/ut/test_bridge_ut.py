@@ -1,7 +1,6 @@
 import pytest
-from saichallenger.common.sai_data import SaiObjType
 from saichallenger.common.sai import Sai
-
+from saichallenger.common.sai_data import SaiObjType
 
 bridge_attrs = Sai.get_obj_attrs(SaiObjType.BRIDGE)
 bport_attrs = Sai.get_obj_attrs(SaiObjType.BRIDGE_PORT)
@@ -13,7 +12,7 @@ bport_attrs_updated = {}
 def skip_all(testbed_instance):
     testbed = testbed_instance
     if testbed is not None and len(testbed.npu) != 1:
-        pytest.skip("invalid for \"{}\" testbed".format(testbed.name))
+        pytest.skip(f"invalid for \"{testbed.name}\" testbed")
 
 
 @pytest.fixture(scope="module")

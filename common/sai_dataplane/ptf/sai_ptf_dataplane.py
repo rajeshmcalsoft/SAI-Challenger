@@ -1,17 +1,17 @@
-import ptf
-import ptf.dataplane
-from ptf import config
-from unittest import TestCase
-import os
-import copy
-import sys
 import importlib
-import random
-import time
-import signal
 import logging
+import os
+import random
+import signal
+import sys
+import time
+from unittest import TestCase
+
+import ptf.dataplane
 from sai_dataplane.sai_dataplane import SaiDataPlane
 
+import ptf
+from ptf import config
 
 # The default configuration dictionary for PTF
 config_default = {
@@ -180,7 +180,7 @@ class SaiPtfDataPlane(SaiDataPlane, TestCase):
 
         if platform_name == "nn":
             try:
-                import nnpy
+                pass
             except:
                 logging.critical("Cannot use 'nn' platform if nnpy package is not installed")
                 sys.exit(1)
@@ -189,7 +189,7 @@ class SaiPtfDataPlane(SaiDataPlane, TestCase):
         try:
             platform_mod = self.__import_module(config["platform_dir"], platform_name)
         except:
-            logging.warn("Failed to import " + platform_name + " platform module")
+            logging.warning("Failed to import " + platform_name + " platform module")
             raise
 
         if self.config and (self.config.get("port_groups", None) is not None):
@@ -202,7 +202,7 @@ class SaiPtfDataPlane(SaiDataPlane, TestCase):
             try:
                 platform_mod.platform_config_update(config)
             except:
-                logging.warn("Could not run platform host configuration")
+                logging.warning("Could not run platform host configuration")
                 raise
 
         if config["port_map"] is None:

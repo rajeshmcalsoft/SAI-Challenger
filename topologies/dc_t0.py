@@ -1,6 +1,4 @@
 from contextlib import contextmanager
-import pytest
-from sai import SaiObjType
 
 
 @contextmanager

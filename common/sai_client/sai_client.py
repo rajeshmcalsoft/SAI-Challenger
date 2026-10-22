@@ -1,6 +1,6 @@
+import os
 import sys
 import time
-import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
@@ -14,7 +14,6 @@ class SaiClient:
 
     def deinit(self):
         """Release transport resources held by the client on session end."""
-        pass
 
     def set_loglevel(self, sai_api, loglevel):
         raise NotImplementedError

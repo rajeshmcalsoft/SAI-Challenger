@@ -35,9 +35,8 @@ import pytest
 # lib/ sits next to this file; make it importable when the file is run alone.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from saichallenger.common.sai_data import SaiObjType
-
 from lib.acl import OK, PORT_ACL_ATTR, UNBOUND, AclHelper
+from saichallenger.common.sai_data import SaiObjType
 
 try:
     from ptf.testutils import send_packet, simple_tcp_packet, verify_packet

@@ -1,14 +1,13 @@
 import json
 import logging
-import paramiko
 import subprocess
 import time
-from functools import wraps
+
+import paramiko
+from sai_thrift import sai_adapter, sai_rpc
 from saichallenger.common.sai_client.sai_client import SaiClient
 from saichallenger.common.sai_client.sai_thrift_client.sai_thrift_utils import *
-from saichallenger.common.sai_data import SaiData
-from saichallenger.common.sai_data import SaiObjType
-from sai_thrift import sai_rpc, sai_adapter
+from saichallenger.common.sai_data import SaiData, SaiObjType
 from thrift.protocol import TBinaryProtocol
 from thrift.transport import TSocket, TTransport
 
@@ -24,7 +23,7 @@ class SaiThriftClient(SaiClient):
         self.rec2vid = {}
         ThriftConverter.generate_metadata()
         # We need it here to make SAI CLI work for Thrift RPC
-        if self.config['saivs'] is "True":
+        if self.config['saivs'] == "True":
             self.assert_process_running("6379", self.config['ip'], "Redis server has not started yet...")
         self.assert_process_running(self.config['port'], self.config['ip'], "Saiserver has not started yet...")
         self.thrift_transport = TSocket.TSocket(self.config['ip'], self.config['port'])
@@ -60,7 +59,7 @@ class SaiThriftClient(SaiClient):
         elif isinstance(obj, SaiObjType):
             obj_type = obj
         else:
-            assert False, "Unsupported OID format type {}".format(type(obj))
+            assert False, f"Unsupported OID format type {type(obj)}"
 
         return obj_type, oid, key
 
@@ -136,7 +135,7 @@ class SaiThriftClient(SaiClient):
                     # FIXME: Looks like self.thrift_client.sai_thrift_object_type_query() is broken for BMv2.
                     obj_type = SaiObjType(self.thrift_client.sai_thrift_object_type_query(ThriftConverter.object_id(oid)))
                 return obj_type
-            except Exception as e:
+            except Exception:
                 raise Exception
         return SaiObjType(0)
 

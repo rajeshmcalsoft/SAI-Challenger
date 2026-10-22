@@ -15,10 +15,6 @@
 import time
 
 import pytest
-from scapy.layers.l2 import Dot1Q
-
-from saichallenger.topologies.sai_ptf_topology import topology
-from saichallenger.common.sai_data import SaiObjType
 from ptf.testutils import (
     send_packet,
     simple_arp_packet,
@@ -30,13 +26,15 @@ from ptf.testutils import (
     verify_packet,
     verify_packets,
 )
+from saichallenger.common.sai_data import SaiObjType
+from scapy.layers.l2 import Dot1Q
 
 
 @pytest.fixture(scope="module", autouse=True)
 def skip_all(testbed_instance):
     testbed = testbed_instance
     if testbed is not None and len(testbed.npu) != 1:
-        pytest.skip('invalid for "{}" testbed'.format(testbed.name))
+        pytest.skip(f'invalid for "{testbed.name}" testbed')
 
 
 @pytest.fixture(scope="module", autouse=True)

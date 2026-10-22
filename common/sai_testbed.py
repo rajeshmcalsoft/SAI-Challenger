@@ -5,14 +5,14 @@ import logging
 import os
 import sys
 
+from saichallenger.common.sai_dataplane.sai_dataplane import SaiDataPlane
+from saichallenger.common.sai_dpu import SaiDpu
 from saichallenger.common.sai_dut import SaiDut
 from saichallenger.common.sai_npu import SaiNpu
-from saichallenger.common.sai_dpu import SaiDpu
 from saichallenger.common.sai_phy import SaiPhy
-from saichallenger.common.sai_dataplane.sai_dataplane import SaiDataPlane
 
 
-class SaiTestbedMeta():
+class SaiTestbedMeta:
     """
     Metadata container for SAI testbed configuration.
 
@@ -100,7 +100,7 @@ class SaiTestbedMeta():
         return sku
 
 
-class SaiTestbed():
+class SaiTestbed:
     def __init__(self, base_dir, name, with_traffic, skip_dataplane=False):
         self.meta = SaiTestbedMeta(base_dir, name)
         self.dut = []

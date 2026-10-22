@@ -1,10 +1,10 @@
 import json
 import logging
-import os
-import pytest
 
+import pytest
 from saichallenger.common.sai_client.sai_client import SaiClient
 from saichallenger.common.sai_data import SaiObjType
+
 
 class CommandProcessor:
     """
@@ -21,7 +21,6 @@ class CommandProcessor:
 
     class SubstitutionError(RuntimeError):
         """Raised when object reference substitution fails."""
-        pass
 
     def __init__(self, sai: 'Sai'):
         """
@@ -217,7 +216,7 @@ class CommandProcessor:
             assert False, f"Unsupported operation: {operation}"
 
 
-class Sai():
+class Sai:
     """
     Main SAI interface class for interacting with SAI objects.
 
@@ -389,7 +388,7 @@ class Sai():
             try:
                 with open('/etc/sai/sai.json', 'r') as f:
                     Sai.metadata = json.load(f)
-            except IOError:
+            except OSError:
                 return None
 
         if obj_type is None:
@@ -523,7 +522,7 @@ class Sai():
         assert status == "SAI_STATUS_SUCCESS", f"Operation failed due to {status}"
 
     def make_list(self, length, elem):
-        return "{}:".format(length) + (elem + ",") * (length - 1) + elem
+        return f"{length}:" + (elem + ",") * (length - 1) + elem
 
     def make_acl_list(self, length):
         return f'false:{self.make_list(length, "0")}'
@@ -634,7 +633,7 @@ class Sai():
 
     def create_rec_alias(self, obj_type, attrs, key=None):
         if obj_type == "SAI_OBJECT_TYPE_SWITCH":
-            self.create_alias(f"switch", obj_type, key)
+            self.create_alias("switch", obj_type, key)
             # Discover objects implicitly created
             # during switch object creation
             self.objects_discovery()
@@ -729,7 +728,7 @@ class Sai():
             self.bulk_create(record[0][1], bulk_keys, bulk_attrs)
         else:
             _, new_keys, _ = self.bulk_create(record[0][1], None, bulk_attrs, len(record)-1)
-            for idx in range(0, len(new_keys)):
+            for idx in range(len(new_keys)):
                 if "oid:" in new_keys[idx]:
                     self.rec2vid[record[idx + 1][0]] = new_keys[idx]
 
@@ -902,10 +901,10 @@ class Sai():
         status = None
         records = self.__parse_rec(fname)
         for cnt, record in records.items():
-            print("#{}: {}".format(cnt, record))
+            print(f"#{cnt}: {record}")
             rec = record[0]
             if rec[1] and not rec[1].startswith("SAI_"):
-                print("Ignored line {}: {}".format(cnt, rec))
+                print(f"Ignored line {cnt}: {rec}")
                 continue
 
             if rec[0] == 'c':
@@ -932,9 +931,9 @@ class Sai():
             elif rec[0] == 'E':
                 self._process_expected_failure_command(rec, status)
             else:
-                print("Ignored line {}: {}".format(cnt, rec))
+                print(f"Ignored line {cnt}: {rec}")
 
-        print("Current SAI objects: {}".format(self.rec2vid))
+        print(f"Current SAI objects: {self.rec2vid}")
 
     def __update_oid_key(self, action, key):
         key_list = key.split(":", 1)

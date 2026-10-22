@@ -87,10 +87,9 @@ lag3+ / VLAN 30 from ``l3_advanced``:
 from __future__ import annotations
 
 from contextlib import contextmanager
-from typing import Any, Dict, List
+from typing import Any
 
 import pytest
-
 from saichallenger.common.sai_data import SaiObjType
 
 
@@ -127,7 +126,7 @@ class SaiPtfTopologyMixin:
         self.def_vlan_list = []
         self.def_vlan_member_list = []
         self.def_rif_list = []
-        self._saved_default_vlan_members: List[Dict[str, str]] = []
+        self._saved_default_vlan_members: list[dict[str, str]] = []
 
         self.switch_id = self.npu.switch_oid
         self.default_vrf = self.npu.default_vrf_oid
@@ -213,7 +212,7 @@ class SaiPtfTopologyMixin:
             return "SAI_VLAN_TAGGING_MODE_TAGGED"
         raise ValueError("tagging_mode_string must be 'untagged', 'tagged', or SAI_VLAN_TAGGING_MODE_*")
 
-    def create_bridge_ports(self, ports: List[int]) -> None:
+    def create_bridge_ports(self, ports: list[int]) -> None:
         """Create bridge ports for the given port indices and expose them as portN_bp."""
         for port_index in ports:
             port_oid = getattr(self, "port%d" % port_index)
@@ -228,7 +227,7 @@ class SaiPtfTopologyMixin:
             setattr(self, "port%d_bp" % port_index, bp_oid)
             self.def_bridge_port_list.append(bp_oid)
 
-    def create_lag_with_members(self, lag_index: int, ports: List[int]) -> None:
+    def create_lag_with_members(self, lag_index: int, ports: list[int]) -> None:
         """Create a LAG with its bridge port and member ports; expose as lagN / lagN_bp / lagN_memberM."""
         lag_oid = self.npu.create(SaiObjType.LAG, [])
         setattr(self, "lag%d" % lag_index, lag_oid)
@@ -257,7 +256,7 @@ class SaiPtfTopologyMixin:
             setattr(self, "lag%d_member%d" % (lag_index, member_index), lm_oid)
             self.def_lag_member_list.append(lm_oid)
 
-    def create_vlan_with_members(self, vlan_id: int, members: Dict[str, str]) -> None:
+    def create_vlan_with_members(self, vlan_id: int, members: dict[str, str]) -> None:
         """
         Create a VLAN and attach bridge ports to it.
 
@@ -278,7 +277,7 @@ class SaiPtfTopologyMixin:
             self.def_vlan_member_list.append(vm_oid)
             idx += 1
 
-    def create_routing_interfaces(self, rif_configs: List[Dict[str, Any]]) -> None:
+    def create_routing_interfaces(self, rif_configs: list[dict[str, Any]]) -> None:
         """
         Create router interfaces from a list of config dicts.
 
@@ -464,7 +463,6 @@ class SaiPtfTopologyMixin:
 class SaiPtfTopologyFixture(SaiPtfTopologyMixin):
     """Thin subclass used by the topology context manager."""
 
-    pass
 
 
 @contextmanager

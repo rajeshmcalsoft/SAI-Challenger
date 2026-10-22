@@ -1,7 +1,7 @@
-import pytest
 import json
+
+import pytest
 from saichallenger.common.sai import Sai
-from saichallenger.common.sai_data import SaiObjType
 
 fdb_entry_attrs = Sai.get_obj_attrs("SAI_OBJECT_TYPE_FDB_ENTRY")
 
@@ -10,7 +10,7 @@ fdb_entry_attrs = Sai.get_obj_attrs("SAI_OBJECT_TYPE_FDB_ENTRY")
 def skip_all(testbed_instance):
     testbed = testbed_instance
     if testbed is not None and len(testbed.npu) != 1:
-        pytest.skip("invalid for \"{}\" testbed".format(testbed.name))
+        pytest.skip(f"invalid for \"{testbed.name}\" testbed")
 
 
 class TestFdbEntry:
@@ -111,10 +111,10 @@ class TestFlushFdbEntries:
 
     def flush_fdb_entries(self, npu, entries_type):
         for mac in TestFlushFdbEntries.dynamic_entries:
-            npu.create_fdb(npu.default_vlan_oid, mac, npu.dot1q_bp_oids[0], f"SAI_FDB_ENTRY_TYPE_DYNAMIC")
+            npu.create_fdb(npu.default_vlan_oid, mac, npu.dot1q_bp_oids[0], "SAI_FDB_ENTRY_TYPE_DYNAMIC")
 
         for mac in TestFlushFdbEntries.static_entries:
-            npu.create_fdb(npu.default_vlan_oid, mac, npu.dot1q_bp_oids[0], f"SAI_FDB_ENTRY_TYPE_STATIC")
+            npu.create_fdb(npu.default_vlan_oid, mac, npu.dot1q_bp_oids[0], "SAI_FDB_ENTRY_TYPE_STATIC")
 
         npu.flush_fdb_entries(npu.switch_oid, [
             "SAI_FDB_FLUSH_ATTR_BV_ID", npu.default_vlan_oid,

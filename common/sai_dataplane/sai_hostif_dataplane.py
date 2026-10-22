@@ -1,8 +1,10 @@
-from sai_dataplane.ptf.sai_ptf_dataplane import SaiPtfDataPlane
-from ptf.dataplane import DataPlane
-from ptf import config
 import copy
 import os
+
+from ptf.dataplane import DataPlane
+from sai_dataplane.ptf.sai_ptf_dataplane import SaiPtfDataPlane
+
+from ptf import config
 
 
 class SaiHostifDataPlane(SaiPtfDataPlane):
@@ -23,7 +25,7 @@ class SaiHostifDataPlane(SaiPtfDataPlane):
 
         # Add ports to PTF dataplane
         for inum, iname in self.ifaces.items():
-            socket_addr = 'tcp://{}:10001'.format(self.dut_ip)
+            socket_addr = f'tcp://{self.dut_ip}:10001'
             self.dataplane.port_add(socket_addr, 0, int(inum))
 
         self.setUp()
