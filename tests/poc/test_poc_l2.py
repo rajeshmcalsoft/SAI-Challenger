@@ -6,21 +6,27 @@ deviation is an expected gap in tests/poc/targets/<profile>.json, not in this fi
 import pytest
 from saichallenger.common.sai_data import SaiObjType
 
-from .lib import l2
+from .lib import data, l2
 
 pytestmark = pytest.mark.l2
 
-VLAN_ID = "20"
-MAC = "00:11:11:11:11:11"
+D = data.load("l2")  # test-chosen values: tests/poc/data/l2.json
+l2.check_data(D)
+VLAN_ID = str(D.vlan_id)
+OTHER_VLAN_ID = str(D.second_vlan_id)
+MAC = D.macs[0]
+
+# defined by the SAI spec, so they stay here
 SUCCESS = "SAI_STATUS_SUCCESS"
 EXISTS = "SAI_STATUS_ITEM_ALREADY_EXISTS"
+IN_USE = "SAI_STATUS_OBJECT_IN_USE"
 
 
 def test_poc_l2_vlan_readback(npu):
-    """VLAN 20 is created and SAI_VLAN_ATTR_VLAN_ID reads back as 20."""
+    """The test VLAN is created and SAI_VLAN_ATTR_VLAN_ID reads back as its ID."""
     with l2.vlan(npu, VLAN_ID) as vlan_oid:
-        data = npu.get(vlan_oid, ["SAI_VLAN_ATTR_VLAN_ID"])
-        assert data.value() == VLAN_ID
+        attr = npu.get(vlan_oid, ["SAI_VLAN_ATTR_VLAN_ID"])
+        assert attr.value() == VLAN_ID
 
 
 def test_poc_l2_vlan_member_readback(npu, poc_ports):
@@ -49,7 +55,7 @@ def test_poc_l2_fdb_static_readback(npu, poc_ports):
 
 @pytest.mark.negative
 def test_poc_l2_vlan_duplicate_rejected(npu):
-    """Creating VLAN 20 twice fails with SAI_STATUS_ITEM_ALREADY_EXISTS."""
+    """Creating the test VLAN twice fails with SAI_STATUS_ITEM_ALREADY_EXISTS."""
     with l2.vlan(npu, VLAN_ID):
         status, dup_oid = npu.create(
             SaiObjType.VLAN, ["SAI_VLAN_ATTR_VLAN_ID", VLAN_ID], do_assert=False)
@@ -72,25 +78,23 @@ def test_poc_l2_vlan_invalid_id_rejected(npu, bad_id):
         if status == SUCCESS:
             npu.remove(vlan_oid)
 
-IN_USE = "SAI_STATUS_OBJECT_IN_USE"
-
 
 @pytest.mark.negative
 def test_poc_l2_remove_vlan_with_members_rejected(npu, poc_ports):
     """Removing a VLAN that still has a member fails with OBJECT_IN_USE; the VLAN stays."""
     (p,) = poc_ports(1)
-    vlan30 = npu.create(SaiObjType.VLAN, ["SAI_VLAN_ATTR_VLAN_ID", "30"])
-    member = npu.create_vlan_member(vlan30, npu.dot1q_bp_oids[p], l2.TAGGED)
-    status = npu.remove(vlan30, do_assert=False)
+    other_vlan = npu.create(SaiObjType.VLAN, ["SAI_VLAN_ATTR_VLAN_ID", OTHER_VLAN_ID])
+    member = npu.create_vlan_member(other_vlan, npu.dot1q_bp_oids[p], l2.TAGGED)
+    status = npu.remove(other_vlan, do_assert=False)
     try:
         assert status == IN_USE, f"target removes a VLAN that has members: {status}"
-        assert npu.get(vlan30, ["SAI_VLAN_ATTR_VLAN_ID"]).value() == "30"
+        assert npu.get(other_vlan, ["SAI_VLAN_ATTR_VLAN_ID"]).value() == OTHER_VLAN_ID
     finally:
         if status == SUCCESS:
             npu.reset()  # the VLAN is gone but its member may remain; tell the team channel
         else:
             npu.remove(member)
-            npu.remove(vlan30)
+            npu.remove(other_vlan)
 
 
 @pytest.mark.negative
@@ -98,8 +102,8 @@ def test_poc_l2_remove_bridge_port_in_use_rejected(npu, poc_ports):
     """Removing a bridge port that is a VLAN member fails with OBJECT_IN_USE; the port stays."""
     (p,) = poc_ports(1)
     bp_oid = npu.dot1q_bp_oids[p]
-    vlan30 = npu.create(SaiObjType.VLAN, ["SAI_VLAN_ATTR_VLAN_ID", "30"])
-    member = npu.create_vlan_member(vlan30, bp_oid, l2.TAGGED)
+    other_vlan = npu.create(SaiObjType.VLAN, ["SAI_VLAN_ATTR_VLAN_ID", OTHER_VLAN_ID])
+    member = npu.create_vlan_member(other_vlan, bp_oid, l2.TAGGED)
     status = npu.remove(bp_oid, do_assert=False)
     try:
         assert status == IN_USE, f"target removes a bridge port that is in use: {status}"
@@ -108,4 +112,4 @@ def test_poc_l2_remove_bridge_port_in_use_rejected(npu, poc_ports):
             npu.reset()  # the default bridge port is gone; tell the team channel
         else:
             npu.remove(member)
-            npu.remove(vlan30)
+            npu.remove(other_vlan)

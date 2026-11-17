@@ -74,6 +74,11 @@ If the saivs build fails, run.sh falls back to the prebuilt image. If Docker Hub
 tests/poc/targets/<name>.json holds the testbed, exec options, lock name, usable ports, traffic filters and
 expected_gaps.
 
+Test data is separate. Values a test chooses (VLAN IDs, MACs, packet addresses) live in
+tests/poc/data/<track>.json (for example data/l2.json) and are read with lib/data.py at import time.
+Values the SAI spec defines (status codes, invalid IDs) stay in the test code. Target deviations go only in
+the target profile.
+
 Fields (all read by tests/poc/conftest.py or scripts/poc/run_poc.sh):
 
 | Field | Read by | Meaning |
@@ -132,12 +137,14 @@ test_l2_basic.py on saivpp is flaky (0 to 5 failures of 7 over 18 runs, 5 to 11 
 ## 8. Packet capture
 
 Traffic tests use the pcap_capture fixture: a scapy sniffer on veth1, veth2 and veth3 writes
-tests/poc/reports/<test>.pcap. View with: tcpdump -nn -e -r <file>; in Wireshark use vlan.id == 20 for the VLAN 20 tag.
+tests/poc/reports/<test>.pcap. View with: tcpdump -nn -e -r <file>; in Wireshark filter on vlan.id == <vlan_id from tests/poc/data/l2.json> (20 by default).
 
 ## 9. Expected gaps
 
 A deviation from the SAI specification is not hidden: the test stays and is listed in expected_gaps in the profile
 with a reason. The test is then reported as xfail (strict: if it starts to pass, the run fails and the gap is removed).
+By design, the terminal prints an xfail as PASSED (pytest_report_teststatus in conftest.py), so the terminal
+summary counts it as passed. The XML and HTML reports still record it as xfail with the reason; count gaps from those.
 A "[" in a pattern is literal, so test_poc_l2_vlan_invalid_id_rejected[4095] matches that exact test id.
 Add one: python3 add_gap.py <profile> '<test name>' '<reason>'.
 

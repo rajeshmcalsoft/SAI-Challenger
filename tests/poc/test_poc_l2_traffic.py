@@ -13,31 +13,33 @@ from ptf.testutils import (
     verify_packets,
 )
 
-from .lib import l2
+from .lib import data, l2
 
 pytestmark = [pytest.mark.l2, pytest.mark.traffic]
 
-VLAN_ID = "20"
-MACS = ["00:11:11:11:11:11", "00:22:22:22:22:22", "00:33:33:33:33:33"]
-BCAST = "ff:ff:ff:ff:ff:ff"
+D = data.load("l2")  # test-chosen values: tests/poc/data/l2.json
+l2.check_data(D)
+VLAN_ID = str(D.vlan_id)
+MACS = D.macs
+BCAST = "ff:ff:ff:ff:ff:ff"  # defined by Ethernet, so it stays here
 
 
 def tcp(eth_dst, eth_src, vlan=None, ip_id=101):
-    """A TCP packet; with vlan set it carries that 802.1Q tag (104 bytes, as upstream)."""
+    """A TCP packet; with vlan set it carries that 802.1Q tag (packet.tagged_pktlen bytes)."""
     args = {
         "eth_dst": eth_dst,
         "eth_src": eth_src,
-        "ip_dst": "10.0.0.1",
+        "ip_dst": D.packet.ip_dst,
         "ip_id": ip_id,
-        "ip_ttl": 64,
+        "ip_ttl": D.packet.ip_ttl,
     }
     if vlan is not None:
-        args.update(dl_vlan_enable=True, vlan_vid=int(vlan), pktlen=104)
+        args.update(dl_vlan_enable=True, vlan_vid=int(vlan), pktlen=D.packet.tagged_pktlen)
     return simple_tcp_packet(**args)
 
 
 def test_poc_l2_access_forward_both_ways(npu, dataplane, pcap_capture, poc_ports):
-    """VLAN 20 on three access ports: frames p0 -> p2 and p2 -> p0 arrive only on the destination."""
+    """The test VLAN on three access ports: frames p0 -> p2 and p2 -> p0 arrive only on the destination."""
     p0, p1, p2 = poc_ports(3)
     with l2.access_vlan(npu, VLAN_ID, {p0: MACS[0], p1: MACS[1], p2: MACS[2]}):
         forward = tcp(MACS[2], MACS[0], ip_id=101)
@@ -52,7 +54,7 @@ def test_poc_l2_access_forward_both_ways(npu, dataplane, pcap_capture, poc_ports
 
 
 def test_poc_l2_access_to_trunk_tag_push(npu, dataplane, pcap_capture, poc_ports):
-    """An untagged frame from an access port leaves the trunk port tagged with VLAN 20."""
+    """An untagged frame from an access port leaves the trunk port tagged with the test VLAN."""
     p0, p1 = poc_ports(2)
     with l2.vlan(npu, VLAN_ID) as vlan_oid, \
             l2.vlan_member(npu, vlan_oid, p0, l2.UNTAGGED), \

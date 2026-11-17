@@ -13,6 +13,18 @@ TAGGED = "SAI_VLAN_TAGGING_MODE_TAGGED"
 PVID = "SAI_PORT_ATTR_PORT_VLAN_ID"
 
 
+def check_data(d):
+    """Reject data/l2.json values the tests cannot use (VLAN 1 is the default VLAN)."""
+    for key in ("vlan_id", "second_vlan_id"):
+        value = getattr(d, key)
+        if not 1 < value < 4095:
+            raise ValueError(f"data/l2.json: {key}={value} must be 2..4094")
+    if d.vlan_id == d.second_vlan_id:
+        raise ValueError("data/l2.json: vlan_id and second_vlan_id must differ")
+    if len(d.macs) < 3 or len(set(d.macs)) != len(d.macs):
+        raise ValueError("data/l2.json: macs needs at least 3 distinct addresses")
+
+
 @contextmanager
 def vlan(npu, vlan_id):
     """Create VLAN <vlan_id>; yield its OID; remove it on exit."""
