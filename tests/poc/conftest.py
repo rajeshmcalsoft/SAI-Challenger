@@ -70,6 +70,12 @@ def pytest_report_header(config):
     return f"poc target profile: {name} | mld filter: {'on' if _mld_wanted(config) else 'off'}"
 
 
+def pytest_report_teststatus(report, config):
+    """Show expected failures (gaps) as PASSED in the terminal."""
+    if report.when == "call" and report.skipped and hasattr(report, "wasxfail"):
+        return "passed", ".", "PASSED"
+
+
 def pytest_collection_modifyitems(config, items):
     """Mark every test named in the profile's expected_gaps as strict xfail."""
     gaps = config.stash[PROFILE].get("expected_gaps", {})
