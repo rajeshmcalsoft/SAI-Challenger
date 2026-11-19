@@ -14,10 +14,8 @@ NEIGHBOR_MAC = "00:11:22:33:44:55"
 # Second neighbor, as in upstream test_route_update
 NEIGHBOR_IP_2 = "10.10.10.3"
 NEIGHBOR_MAC_2 = "00:11:22:33:44:66"
-# SUGGESTION (not from the plans or upstream): IPv6 documentation address (RFC 3849)
 NEIGHBOR_IP_V6 = "2001:db8::2"
 ROUTE_V4 = "100.0.0.0/8"
-# SUGGESTION (not from the plans or upstream): IPv6 documentation prefix (RFC 3849)
 ROUTE_V6 = "2001:db8::/32"
 # Edge-case prefixes (plan, Week 3, Wed 21 Oct); IPv6 host address from RFC 3849
 ROUTE_V4_HOST = "10.10.10.1/32"
@@ -28,7 +26,6 @@ FORWARD = "SAI_PACKET_ACTION_FORWARD"
 DROP = "SAI_PACKET_ACTION_DROP"
 NEXT_HOP_ID = "SAI_ROUTE_ENTRY_ATTR_NEXT_HOP_ID"
 SUCCESS = "SAI_STATUS_SUCCESS"
-
 
 def test_poc_l3_vrf_default_admin_state(npu, vrf):
     # A new (non-default) VRF has admin state "true" by default
@@ -41,7 +38,6 @@ def test_poc_l3_vrf_default_admin_state(npu, vrf):
     state = npu.get(vrf, ["SAI_VIRTUAL_ROUTER_ATTR_ADMIN_V4_STATE"]).value()
     assert state == "true"
 
-
 def test_poc_l3_vrf_create_readback(npu, vrf):
     # Follows tests/test_vrf.py::test_default_vrf: set the attribute first, then
     # read it back. "false" differs from the SAI default (saivirtualrouter.h:
@@ -52,11 +48,9 @@ def test_poc_l3_vrf_create_readback(npu, vrf):
     state = npu.get(vrf, ["SAI_VIRTUAL_ROUTER_ATTR_ADMIN_V4_STATE", "true"]).value()
     assert state == "false"
 
-
 def test_poc_l3_port_rif_create_remove(npu, port_rif):
     rif_type = npu.get(port_rif, ["SAI_ROUTER_INTERFACE_ATTR_TYPE"]).value()
     assert rif_type == "SAI_ROUTER_INTERFACE_TYPE_PORT"
-
 
 def test_poc_l3_port_rif_port_restored(npu, poc_ports):
     # Must run right after the RIF test (pytest keeps file order): its fixture
@@ -66,7 +60,6 @@ def test_poc_l3_port_rif_port_restored(npu, poc_ports):
     port_idx = poc_ports(1)[0]
     bp_oid = npu.dot1q_bp_oids[port_idx]
     assert npu.get_vlan_member(npu.default_vlan_oid, bp_oid) is not None
-
 
 def test_poc_l3_neighbor_nexthop_create_remove(npu, port_rif, neighbor_nexthop):
     # port_rif is listed before neighbor_nexthop so the RIF is torn down last.
@@ -84,17 +77,14 @@ def test_poc_l3_neighbor_nexthop_create_remove(npu, port_rif, neighbor_nexthop):
     neighbor_nexthop.remove(nexthop_oid)
     neighbor_nexthop.remove(neighbor_key)
 
-
 def _cpu_port_oid(npu):
     return npu.get(npu.switch_oid, ["SAI_SWITCH_ATTR_CPU_PORT", "oid:0x0"]).oid()
-
 
 def _status(result):
     # npu.create(key, attrs, False) returns (status, vid) on both the redis
     # client (sai_redis_client.py) and the thrift client (sai_thrift_client.py).
     # A plain status string is also accepted for safety.
     return result[0] if isinstance(result, tuple) else result
-
 
 def _route_create_remove(npu, vrf, prefix):
     # Same call pattern as upstream test_dc_t1.py::test_basic_route: a route whose
@@ -110,24 +100,19 @@ def _route_create_remove(npu, vrf, prefix):
     finally:
         npu.remove_route(prefix, vrf)
 
-
 def test_poc_l3_route_ipv4_create_remove(npu, vrf):
     _route_create_remove(npu, vrf, ROUTE_V4)
 
-
 def test_poc_l3_route_ipv6_create_remove(npu, vrf):
     _route_create_remove(npu, vrf, ROUTE_V6)
-
 
 def test_poc_l3_route_ipv4_host_create_remove(npu, vrf):
     # Edge-case: /32 host route (plan, Week 3, Wed 21 Oct).
     _route_create_remove(npu, vrf, ROUTE_V4_HOST)
 
-
 def test_poc_l3_route_ipv6_host_create_remove(npu, vrf):
     # Edge-case: /128 host route (plan, Week 3, Wed 21 Oct).
     _route_create_remove(npu, vrf, ROUTE_V6_HOST)
-
 
 def test_poc_l3_nhg_create_remove(npu, port_rif, neighbor_nexthop, next_hop_group):
     # Fixture order matters for teardown: group and members first, then the
@@ -150,7 +135,6 @@ def test_poc_l3_nhg_create_remove(npu, port_rif, neighbor_nexthop, next_hop_grou
     next_hop_group.remove(member_1)
     next_hop_group.remove(group_oid)
 
-
 def test_poc_l3_route_attr_update(npu, vrf):
     # Model: upstream test_route_update (without traffic). Full round trip:
     # set DROP and read it back, then restore FORWARD and read it back.
@@ -163,7 +147,6 @@ def test_poc_l3_route_attr_update(npu, vrf):
         assert npu.get(route_key, [PACKET_ACTION, ""]).value() == FORWARD
     finally:
         npu.remove_route(ROUTE_V4, vrf)
-
 
 def test_poc_l3_route_nexthop_change(npu, vrf, port_rif, neighbor_nexthop):
     # Same sequence as upstream test_route_update, but without packets (Level 1).
@@ -182,7 +165,6 @@ def test_poc_l3_route_nexthop_change(npu, vrf, port_rif, neighbor_nexthop):
     finally:
         npu.remove_route(ROUTE_V4, vrf)
 
-
 def test_poc_l3_vlan_rif_create_remove(npu, vlan_rif):
     # Plan: create VLAN 40 and a VLAN RIF on it, read TYPE and VLAN_ID; the
     # fixture removes the RIF and then the VLAN. Verified on saivs, saivpp and
@@ -190,7 +172,6 @@ def test_poc_l3_vlan_rif_create_remove(npu, vlan_rif):
     rif_type = npu.get(vlan_rif.rif, ["SAI_ROUTER_INTERFACE_ATTR_TYPE"]).value()
     assert rif_type == "SAI_ROUTER_INTERFACE_TYPE_VLAN"
     assert npu.get(vlan_rif.rif, ["SAI_ROUTER_INTERFACE_ATTR_VLAN_ID"]).oid() == vlan_rif.vlan
-
 
 def test_poc_l3_ipv6_neighbor_create_remove(npu, port_rif, neighbor_nexthop):
     # Plan: IPv6 neighbor on a port RIF, read DST_MAC_ADDRESS, remove it.
@@ -200,7 +181,6 @@ def test_poc_l3_ipv6_neighbor_create_remove(npu, port_rif, neighbor_nexthop):
     assert mac.lower() == NEIGHBOR_MAC
     neighbor_nexthop.remove(nexthop_oid)
     neighbor_nexthop.remove(neighbor_key)
-
 
 @pytest.mark.negative
 def test_poc_l3_route_duplicate_rejected(npu, vrf):
@@ -219,7 +199,6 @@ def test_poc_l3_route_duplicate_rejected(npu, vrf):
     finally:
         npu.remove_route(ROUTE_V4, vrf)
 
-
 @pytest.mark.negative
 def test_poc_l3_route_invalid_nexthop_rejected(npu, vrf):
     # The VRF OID is a well-formed, existing OID of a type that
@@ -236,7 +215,6 @@ def test_poc_l3_route_invalid_nexthop_rejected(npu, vrf):
         if status == SUCCESS:  # nothing must be left behind
             npu.remove(route_key)
 
-
 @pytest.mark.negative
 def test_poc_l3_nexthop_in_use_rejected(npu, vrf, port_rif, neighbor_nexthop):
     _, nexthop_oid = neighbor_nexthop.create(port_rif, NEIGHBOR_IP, NEIGHBOR_MAC)
@@ -247,8 +225,6 @@ def test_poc_l3_nexthop_in_use_rejected(npu, vrf, port_rif, neighbor_nexthop):
     finally:
         # The route must go before the fixture removes the next hop
         npu.remove_route(ROUTE_V4, vrf)
-
-
 def test_poc_l3_route_ipv4_default_create_remove(npu):
     # Edge-case: 0.0.0.0/0 default route (plan, Week 3, Wed 21 Oct).
     # Placed LAST in the file: on saivpp, syncd stops responding after the
