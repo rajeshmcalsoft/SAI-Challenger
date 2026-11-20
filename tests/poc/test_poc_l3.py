@@ -4,25 +4,24 @@
 import pytest
 from saichallenger.common.sai_data import SaiObjType
 
+from .lib import data
 from .lib.l3 import neighbor_nexthop, next_hop_group, port_rif, vlan_rif, vrf  # noqa: F401  (pytest fixtures)
 
 pytestmark = pytest.mark.l3
 
-# Values taken from upstream tests/native/test_route.py and tests/test_dc_t1.py
-NEIGHBOR_IP = "10.10.10.2"
-NEIGHBOR_MAC = "00:11:22:33:44:55"
-# Second neighbor, as in upstream test_route_update
-NEIGHBOR_IP_2 = "10.10.10.3"
-NEIGHBOR_MAC_2 = "00:11:22:33:44:66"
-# SUGGESTION (not from the plans or upstream): IPv6 documentation address (RFC 3849)
-NEIGHBOR_IP_V6 = "2001:db8::2"
-ROUTE_V4 = "100.0.0.0/8"
-# SUGGESTION (not from the plans or upstream): IPv6 documentation prefix (RFC 3849)
-ROUTE_V6 = "2001:db8::/32"
-# Edge-case prefixes (plan, Week 3, Wed 21 Oct); IPv6 host address from RFC 3849
-ROUTE_V4_HOST = "10.10.10.1/32"
-ROUTE_V6_HOST = "2001:db8::1/128"
-ROUTE_V4_DEFAULT = "0.0.0.0/0"
+D = data.load("l3")  # test-chosen values: tests/poc/data/l3.json
+NEIGHBOR_IP = D.neighbor.ip
+NEIGHBOR_MAC = D.neighbor.mac
+NEIGHBOR_IP_2 = D.neighbor.ip_2
+NEIGHBOR_MAC_2 = D.neighbor.mac_2
+NEIGHBOR_IP_V6 = D.neighbor.ip_v6
+ROUTE_V4 = D.route.v4
+ROUTE_V6 = D.route.v6
+ROUTE_V4_HOST = D.route.v4_host
+ROUTE_V6_HOST = D.route.v6_host
+ROUTE_V4_DEFAULT = D.route.v4_default
+
+# defined by the SAI spec, so they stay here
 PACKET_ACTION = "SAI_ROUTE_ENTRY_ATTR_PACKET_ACTION"
 FORWARD = "SAI_PACKET_ACTION_FORWARD"
 DROP = "SAI_PACKET_ACTION_DROP"
@@ -61,8 +60,8 @@ def test_poc_l3_port_rif_create_remove(npu, port_rif):
 def test_poc_l3_port_rif_port_restored(npu, poc_ports):
     # Must run right after the RIF test (pytest keeps file order): its fixture
     # is already torn down, so the port should be back in the default VLAN.
-    # poc_ports(n) returns the first n profile port indices (confirmed in
-    # tests/poc/conftest.py); get_vlan_member() returns None if it is not a member.
+    # poc_ports(n) returns the first n profile port indices;
+    # get_vlan_member() returns None if the bridge port is not a member.
     port_idx = poc_ports(1)[0]
     bp_oid = npu.dot1q_bp_oids[port_idx]
     assert npu.get_vlan_member(npu.default_vlan_oid, bp_oid) is not None
@@ -120,12 +119,12 @@ def test_poc_l3_route_ipv6_create_remove(npu, vrf):
 
 
 def test_poc_l3_route_ipv4_host_create_remove(npu, vrf):
-    # Edge-case: /32 host route (plan, Week 3, Wed 21 Oct).
+    # Edge case: /32 host route.
     _route_create_remove(npu, vrf, ROUTE_V4_HOST)
 
 
 def test_poc_l3_route_ipv6_host_create_remove(npu, vrf):
-    # Edge-case: /128 host route (plan, Week 3, Wed 21 Oct).
+    # Edge case: /128 host route.
     _route_create_remove(npu, vrf, ROUTE_V6_HOST)
 
 
@@ -184,16 +183,16 @@ def test_poc_l3_route_nexthop_change(npu, vrf, port_rif, neighbor_nexthop):
 
 
 def test_poc_l3_vlan_rif_create_remove(npu, vlan_rif):
-    # Plan: create VLAN 40 and a VLAN RIF on it, read TYPE and VLAN_ID; the
-    # fixture removes the RIF and then the VLAN. Verified on saivs, saivpp and
-    # saivs-thrift on 21 Oct 2026: a member-less VLAN RIF is accepted on all three.
+    # Create a VLAN and a VLAN RIF on it, read TYPE and VLAN_ID; the fixture
+    # removes the RIF and then the VLAN. A member-less VLAN RIF is accepted on
+    # saivs, saivpp and saivs-thrift.
     rif_type = npu.get(vlan_rif.rif, ["SAI_ROUTER_INTERFACE_ATTR_TYPE"]).value()
     assert rif_type == "SAI_ROUTER_INTERFACE_TYPE_VLAN"
     assert npu.get(vlan_rif.rif, ["SAI_ROUTER_INTERFACE_ATTR_VLAN_ID"]).oid() == vlan_rif.vlan
 
 
 def test_poc_l3_ipv6_neighbor_create_remove(npu, port_rif, neighbor_nexthop):
-    # Plan: IPv6 neighbor on a port RIF, read DST_MAC_ADDRESS, remove it.
+    # IPv6 neighbor on a port RIF: read DST_MAC_ADDRESS, then remove it.
     # The next hop is created too, as in the IPv4 test. Same MAC placeholder.
     neighbor_key, nexthop_oid = neighbor_nexthop.create(port_rif, NEIGHBOR_IP_V6, NEIGHBOR_MAC)
     mac = npu.get(neighbor_key, ["SAI_NEIGHBOR_ENTRY_ATTR_DST_MAC_ADDRESS", "00:00:00:00:00:00"]).value()
@@ -204,10 +203,9 @@ def test_poc_l3_ipv6_neighbor_create_remove(npu, port_rif, neighbor_nexthop):
 
 @pytest.mark.negative
 def test_poc_l3_route_duplicate_rejected(npu, vrf):
-    # "Adding the same route twice fails" (plan). All three targets return
-    # SAI_STATUS_ITEM_ALREADY_EXISTS (verified on saivs, saivpp and saivs-thrift,
-    # 21 Oct 2026), so the exact status is asserted. A target that deviates is
-    # recorded in its profile under expected_gaps.
+    # Adding the same route twice fails. saivs, saivpp and saivs-thrift all return
+    # SAI_STATUS_ITEM_ALREADY_EXISTS, so the exact status is asserted. A target
+    # that deviates is recorded in its profile under expected_gaps.
     cpu_port_oid = _cpu_port_oid(npu)
     npu.create_route(ROUTE_V4, vrf, cpu_port_oid, [PACKET_ACTION, FORWARD])
     try:
@@ -250,7 +248,7 @@ def test_poc_l3_nexthop_in_use_rejected(npu, vrf, port_rif, neighbor_nexthop):
 
 
 def test_poc_l3_route_ipv4_default_create_remove(npu):
-    # Edge-case: 0.0.0.0/0 default route (plan, Week 3, Wed 21 Oct).
+    # Edge case: 0.0.0.0/0 default route.
     # Placed LAST in the file: on saivpp, syncd stops responding after the
     # remove of this route, which would corrupt all subsequent tests. Putting
     # it last means no other test is affected. Recorded as a gap in saivpp.json.
