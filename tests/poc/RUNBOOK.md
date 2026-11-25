@@ -119,6 +119,42 @@ Profile in use for saivpp:
 Every run takes the profile's lock, runs inside the right container, and writes tests/poc/reports/<profile>-<time>.html
 and .xml (JUnit). Never run pytest in a container directly. Keep long runs in tmux.
 
+Every run also writes a test log of what really happened (tests/poc/lib/testlog.py; no test file needs anything):
+
+| File | What |
+|---|---|
+| `<profile>-<time>.testlog.md` | readable log: run header, results index, then per test: intent (docstring), verdict, every check with its values, every SAI call with attributes, status and read-back values, packets sent and received, cleanup summary |
+| `<profile>-<time>.events.jsonl` | the raw events, one JSON object per line; the .md and .rec are rendered from it |
+| `<profile>-<time>.rec` | the SAI calls in sairedis.rec grammar, with `#|START`/`#|END` test markers (for reading; replaying it with npu.apply_rec is not tested) |
+| `<profile>-<time>.html` | each test row also has a "Test log" block |
+
+How it is captured: SAI calls at the SAI client (what the test asked and what the target answered), checks from
+pytest's assertion pass hook (run_poc.sh passes `-o enable_assertion_pass_hook=true`) and from the ptf `verify_*`
+functions, packets from the PTF dataplane. Switch init and a reset after a failed test are shown separately from the
+test's own calls, and condensed: runs of successful gets become one line with a count per attribute, and a block of
+calls repeated for many objects shows its first and last rounds. Creates, sets, removes and any call that did not
+succeed are always listed; the .rec and .jsonl keep every call. A test without a docstring shows "(no docstring)":
+add one that says what the test checks.
+
+    python3 -I tests/poc/lib/testlog_render.py tests/poc/reports/<run>.events.jsonl   # re-render a run's log
+    scripts/poc/run_poc.sh saivs poc_$(whoami) -p no:poc_testlog                    # one run without the test log
+
+A run stopped early leaves no .xml or .html: the PTF dataplane (upstream) restores the default SIGINT action, so
+an interrupt ends pytest at once. The .events.jsonl is written as the run goes. When pytest stops but run_poc.sh
+does not (for example pytest killed inside the container), run_poc.sh renders the .testlog.md and .rec from it on
+the host. After Ctrl-C in the terminal, run_poc.sh stops too: re-render by hand with the command above. The test that
+was running shows as "Interrupted", with the phases it finished. Needs Python 3.10+ and pytest 7.4+ (the containers
+have Python 3.13 and pytest 9.1).
+
+`-p no:poc_testlog` stops the recording (pcaps then go to tests/poc/reports/<test>.pcap, as before). Two side
+effects stay in every run, and neither changes a result:
+asserts in tests/poc/lib helpers are rewritten by pytest (their failure messages now show values), and
+`-o enable_assertion_pass_hook=true` is set. ACL helpers are loaded as top-level `lib` by test_poc_acl.py and
+test_acl_drop_exp.py, so asserts inside lib/acl.py do not appear as checks (asserts in the test files do).
+
+Not captured: syncd and vendor SAI library logs inside the container. A SAI call whose client returns no status
+(e.g. flush_fdb_entries on saivs-thrift) is shown as "(no status returned by the client)".
+
 ## 7. MLD filter
 
 On saivpp, VPP itself sends IPv6 multicast listener frames (MLD) on its ports. They would break exact-match packet
@@ -137,7 +173,7 @@ test_l2_basic.py on saivpp is flaky (0 to 5 failures of 7 over 18 runs, 5 to 11 
 ## 8. Packet capture
 
 Traffic tests use the pcap_capture fixture: a scapy sniffer on veth1, veth2 and veth3 writes
-tests/poc/reports/<test>.pcap. View with: tcpdump -nn -e -r <file>; in Wireshark filter on vlan.id == <vlan_id from tests/poc/data/l2.json> (20 by default).
+tests/poc/reports/<profile>-<time>/<test>.pcap (one folder per run; the test log links it; with `-p no:poc_testlog`, tests/poc/reports/<test>.pcap). View with: tcpdump -nn -e -r <file>; in Wireshark filter on vlan.id == <vlan_id from tests/poc/data/l2.json> (20 by default).
 
 ## 9. Expected gaps
 
@@ -179,6 +215,8 @@ that profile has been run):
 | report folder not writable | files created as root in the container | run_poc.sh chowns the folder at the end; chown manually if a run was killed |
 | run waits "for the lock" | someone else is running | wait; do not kill their run |
 | pcap file missing | the test did not finish or capture is off | rerun the single test with --traffic |
+| no .testlog.md after a run | the run was killed before the end | re-render it from the .events.jsonl (section 6) |
+| test log shows no CHECK PASS lines | `-o enable_assertion_pass_hook=true` missing (pytest run outside run_poc.sh), or an old pytest-rewritten .pyc under tests/poc that run_poc.sh could not delete (root-owned) | use run_poc.sh; `find tests/poc -name '*-pytest-*.pyc'` and remove what it lists |
 | exec.sh prints "exit code 3" after supervisorctl status | one-shot jobs (dependent-startup, vpp-veth-creator, veth-creator) are EXITED by design | normal; only a long-running process not RUNNING is a problem |
 | test_l2_basic.py on saivpp fails with a 33:33:... frame | MLD stray frame; upstream tests do not load the PoC filter | use the PoC tests, which filter MLD |
 | exec.sh mangles a quoted argument (sh -c '...') | exec.sh wraps the command in its own bash -c | run the pipe on the host: ./exec.sh ... cmd 2>&1 \| grep ... |

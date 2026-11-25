@@ -18,13 +18,23 @@ TB=${P[0]}; LOCK=${P[1]}; ARGS=("${P[@]:2}")
 EXEC=(./exec.sh "${ARGS[@]}" --no-tty)
 OUT=poc_$ME/reports/$TARGET-$STAMP
 mkdir -p "$ROOT/tests/poc/reports"
+# commit of the tests for the test log header (+dirty if tests/poc or scripts/poc have local changes)
+GIT=$(git -C "$ROOT" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
+[ -n "$(git -C "$ROOT" status --porcelain -- tests/poc scripts/poc 2>/dev/null)" ] && GIT=$GIT+dirty
+# a stale pytest-rewritten .pyc would hide passing asserts from the test log
+find "$ROOT/tests/poc" -name "*-pytest-*.pyc" -delete 2>/dev/null
 cd /opt/sai-poc/SAI-Challenger        # exec.sh must run from here
 echo "Waiting for the $TARGET lock..."
 flock /opt/sai-poc/locks/$LOCK.lock "${EXEC[@]}" \
-  env PYTHONDONTWRITEBYTECODE=1 POC_TARGET_PROFILE=$TARGET pytest -p no:cacheprovider \
-  --testbed=$TB -v "$@" \
+  env PYTHONDONTWRITEBYTECODE=1 POC_TARGET_PROFILE=$TARGET POC_GIT_COMMIT=$GIT pytest -p no:cacheprovider \
+  --testbed=$TB -v -o enable_assertion_pass_hook=true "$@" \
   --html=$OUT.html --self-contained-html --junitxml=$OUT.xml
 rc=$?
 "${EXEC[@]}" chown -R "$(id -u):$(id -g)" poc_$ME/reports
 echo "report: $ROOT/tests/poc/reports/$TARGET-$STAMP.{html,xml}  exit=$rc"
+LOG=$ROOT/tests/poc/reports/$TARGET-$STAMP.testlog.md
+JSONL=$ROOT/tests/poc/reports/$TARGET-$STAMP.events.jsonl
+# pytest stopped early (an interrupt ends it at once) leaves only the events: render them here
+[ ! -f "$LOG" ] && [ -f "$JSONL" ] && python3 -I "$ROOT/tests/poc/lib/testlog_render.py" "$JSONL" > /dev/null
+[ -f "$LOG" ] && echo "test log: $LOG"
 exit $rc
