@@ -5,14 +5,18 @@ rewritten assert in this file would re-enter the pytest_assertion_pass hook.
 
 tests/poc/conftest.py calls configure() once per run. Next to the run's --junitxml report it writes:
     <base>.events.jsonl   every event, one JSON object per line (the source of truth)
-    <base>.testlog.md     the readable log (rendered by testlog_render.py at the end of the run)
     <base>.rec            the SAI calls in sairedis.rec grammar
-and it adds a "Test log" block to each test in the pytest-html report.
+    <base>/               one plain-text log per test, <profile>-<mmdd-hhmm>_<NN>_<test>.log, and an
+                          index; rendered by testlog_render.py at the end of the run
+and it adds the same per-test text as a "Test log" block to each test in the pytest-html report.
 
 Where the events come from (no test file needs to change):
     SAI calls   the SAI client instance: public methods (what the test asked) and the wire layer
                 (`operate` or `_operate*`, whichever the client has: what the target answered). A call
                 that never reaches the wire layer and returns no status is logged without a status.
+    functions   the npu object's public methods (npu.create, npu.remove_vlan_member, ...), and for each
+                top-level call where it came from: the test line and the tests/poc/lib helpers on the
+                call stack, with their simple arguments and whether a helper was entering or exiting
     asserts     pytest_assertion_pass (run_poc.sh sets -o enable_assertion_pass_hook=true)
     packets     the PTF dataplane instance (before_send, poll) and the ptf.testutils verify_* functions
     results     pytest's setup/call/teardown reports
@@ -23,11 +27,13 @@ Turn it off for one run with: -p no:poc_testlog
 """
 # Every hook and wrapper catches Exception and carries on: recording must never change a test result.
 # ruff: noqa: BLE001, S110
+import dis
 import enum
 import functools
 import html
 import inspect
 import json
+import linecache
 import os
 import platform
 import sys
@@ -41,7 +47,7 @@ from . import testlog_render
 
 PLUGIN_NAME = "poc_testlog"
 BASE_KEY = pytest.StashKey[object]()
-SCHEMA = 1
+SCHEMA = 2
 MARK = "_poc_testlog"
 MAX_STR = 4000
 MAX_ITEMS = 512
@@ -60,6 +66,8 @@ PTF_CHECKS = ("verify_packet", "verify_packets", "verify_no_packet", "verify_no_
 PKT_ARGS = ("pkt", "exp_pkt", "exp_packet", "pkts")
 PORT_ARGS = ("ports", "port_id", "port", "port_list", "ports_list")
 TIMEOUT_ARGS = ("timeout", "n_timeout")
+SITE_SKIP_ARGS = ("self", "cls", "npu", "request", "dataplane")
+CO_GENERATOR = inspect.CO_GENERATOR
 
 
 # ---------------------------------------------------------------- public entry points
@@ -94,6 +102,14 @@ def run_dir(config):
     """Folder for this run's extra files (pcaps): reports/<target>-<stamp>/, or None without a log."""
     base = config.stash.get(BASE_KEY, None)
     return Path(base) if base else None
+
+
+def file_stem(config, nodeid):
+    """Base file name for the running test's files (log, pcap), or None when the log is off."""
+    plugin = config.pluginmanager.get_plugin(PLUGIN_NAME)
+    if plugin is None or plugin.rec.test != nodeid:
+        return None
+    return plugin.rec.stem
 
 
 def record(config, kind, **fields):
@@ -259,9 +275,15 @@ class Recorder:
         self.pkt_depth = 0
         self.checks = []             # ptf check functions running now (innermost last)
         self.npu = None
+        self.npu_open = []           # open npu.* calls (SAI client calls attach to the innermost)
+        self.npu_id = 0
         self.alias_fp = None
         self.aliases = {}
         self.test_events = []
+        self.all_events = []         # the whole run, for the per-test text in the pytest-html report
+        self.index = 0               # number of the running test in this run (1-based)
+        self.width = 2
+        self.stem = None
 
     @property
     def jsonl_path(self):
@@ -274,6 +296,7 @@ class Recorder:
         ev = {"v": SCHEMA, "seq": self.seq, "ts": round(time.time(), 6), "k": "session", "test": None,
               "phase": "session", **self.header}
         self.file.write(json.dumps(ev, default=_repr, separators=(",", ":")) + "\n")
+        self.all_events.append(ev)
 
     def emit(self, kind, **fields):
         try:
@@ -289,6 +312,7 @@ class Recorder:
                     ev["fx"], ev["fxs"] = self.fx[-1]
                 ev.update(fields)
                 self.file.write(json.dumps(ev, default=_repr, separators=(",", ":")) + "\n")
+                self.all_events.append(ev)
                 if self.test is not None:
                     self.test_events.append(ev)
                 return ev
@@ -368,7 +392,9 @@ class Recorder:
             if do_assert is None and sig is not None and "do_assert" in sig.parameters:
                 do_assert = sig.parameters["do_assert"].default
             ev = {"op": name, "args": bound, "do_assert": do_assert, "wire": [], "t0": time.time(),
-                  "depth": len(self.api)}
+                  "depth": len(self.api), "npu": self.npu_open[-1]["id"] if self.npu_open else None}
+            if not self.api and not self.npu_open:
+                ev["site"] = _site()
             self.api.append(ev)
             return ev
         except Exception:
@@ -383,7 +409,10 @@ class Recorder:
                     del self.api[i]
                     break
             fields = {"op": ev["op"], "args": ev["args"], "do_assert": ev["do_assert"], "wire": ev["wire"],
-                      "depth": ev["depth"], "ts": round(ev["t0"], 6), "dur": round(time.time() - ev["t0"], 6)}
+                      "depth": ev["depth"], "ts": round(ev["t0"], 6), "dur": round(time.time() - ev["t0"], 6),
+                      "npu": ev["npu"]}
+            if ev.get("site"):
+                fields["site"] = ev["site"]
             if exc is not None:
                 fields["exc"] = _exc(exc)
             else:
@@ -436,8 +465,86 @@ class Recorder:
             self.npu = npus[0] if len(npus) == 1 else None
             self.check_aliases()
             dps = getattr(testbed, "dataplane", None) or []
+            self.emit("testbed", **_testbed_info(testbed, self.npu, dps[0] if len(dps) == 1 else None))
             if len(dps) == 1:
                 self.attach_dataplane(dps[0])
+            if self.npu is not None:
+                self.attach_npu(self.npu)
+        except Exception:
+            pass
+
+    # ---- npu functions (what the tests and lib helpers call)
+
+    def attach_npu(self, npu):
+        if getattr(npu, MARK, False):
+            return
+        try:
+            setattr(npu, MARK, True)
+        except Exception:
+            return
+        cls = type(npu)
+        for name in dir(cls):
+            if name.startswith("_"):
+                continue
+            try:
+                static = inspect.getattr_static(cls, name)
+            except AttributeError:
+                continue
+            if not inspect.isfunction(static):        # properties, static and class methods stay as they are
+                continue
+            fn = getattr(npu, name, None)
+            if callable(fn) and not getattr(fn, MARK, False):
+                try:
+                    setattr(npu, name, self._wrap_npu(name, fn))
+                except Exception:
+                    pass
+
+    def _wrap_npu(self, name, fn):
+        rec = self
+        sig = _signature(fn)
+
+        @functools.wraps(fn)
+        def npu_call(*args, **kwargs):
+            __tracebackhide__ = True
+            ev = rec.npu_begin(name, sig, args, kwargs)
+            try:
+                ret = fn(*args, **kwargs)
+            except BaseException as exc:
+                rec.npu_end(ev, exc=exc)
+                raise
+            rec.npu_end(ev, ret=ret)
+            return ret
+
+        setattr(npu_call, MARK, True)
+        return npu_call
+
+    def npu_begin(self, name, sig, args, kwargs):
+        try:
+            self.npu_id += 1
+            ev = {"id": self.npu_id, "parent": self.npu_open[-1]["id"] if self.npu_open else None, "fn": name,
+                  "args": {k: _j(v) for k, v in _bind(sig, args, kwargs).items()}, "t0": time.time()}
+            if ev["parent"] is None:
+                ev["site"] = _site()
+            self.npu_open.append(ev)
+            return ev
+        except Exception:
+            return None
+
+    def npu_end(self, ev, ret=None, exc=None):
+        if ev is None:
+            return
+        try:
+            for i in range(len(self.npu_open) - 1, -1, -1):
+                if self.npu_open[i] is ev:
+                    del self.npu_open[i]
+                    break
+            t0 = ev.pop("t0")
+            fields = dict(ev, ts=round(t0, 6), dur=round(time.time() - t0, 6))
+            if exc is not None:
+                fields["exc"] = _exc(exc)
+            else:
+                fields["ret"] = _j(ret)
+            self.emit("npu", **fields)
         except Exception:
             pass
 
@@ -505,7 +612,7 @@ class Recorder:
             def before_send(pkt, device_number=0, port_number=-1):
                 __tracebackhide__ = True
                 try:
-                    rec.emit("send", device=device_number, **rec.packet(pkt, port=port_number))
+                    rec.emit("send", device=device_number, site=_site(), **rec.packet(pkt, port=port_number))
                 except Exception:
                     pass
                 return orig_send(pkt, device_number=device_number, port_number=port_number)
@@ -578,7 +685,7 @@ class Recorder:
     def check_begin(self, name, sig, args, kwargs):
         try:
             a = _bind(sig, args, kwargs)
-            info = {"func": name, "t0": time.time()}
+            info = {"func": name, "t0": time.time(), "site": _site()}
             for key in PKT_ARGS:
                 if a.get(key) is not None:
                     pkt = a[key]
@@ -663,12 +770,19 @@ class Plugin:
         self.rec.emit("note", text="session start")
 
     def pytest_collection_finish(self, session):
+        self.rec.width = max(2, len(str(len(session.items))))
         self.rec.emit("collected", n=len(session.items))
 
     def pytest_runtest_logstart(self, nodeid, location):
         self.rec.test = nodeid
         self.rec.test_events = []
         self.rec.phase = "setup"
+        self.rec.index += 1
+        try:
+            name = nodeid.rsplit("::", 1)[-1]
+            self.rec.stem = testlog_render.file_stem(self.rec.header.get("run"), self.rec.index, self.rec.width, name)
+        except Exception:
+            self.rec.stem = None
 
     @pytest.hookimpl(wrapper=True)
     def pytest_runtest_setup(self, item):
@@ -677,6 +791,7 @@ class Plugin:
             info = _test_info(item)
         except Exception:
             info = {"nodeid": item.nodeid, "name": getattr(item, "name", item.nodeid)}
+        info.update(index=self.rec.index, width=self.rec.width, stem=self.rec.stem)
         self.rec.emit("test", **info)
         return (yield)
 
@@ -707,7 +822,8 @@ class Plugin:
             self.rec.emit("fixture_done", name=fixturedef.argname, scope=fixturedef.scope)
 
     def pytest_assertion_pass(self, item, lineno, orig, expl):
-        self.rec.emit("assert", file=_assert_file(), line=lineno, orig=_cut(orig, 500), expl=_cut(expl, 1000))
+        self.rec.emit("assert", file=_assert_file(), line=lineno, orig=_cut(orig, 500), expl=_cut(expl, 1000),
+                      site=_site())
 
     @pytest.hookimpl(wrapper=True)
     def pytest_runtest_makereport(self, item, call):
@@ -732,6 +848,7 @@ class Plugin:
         self.rec.test = None
         self.rec.phase = "session"
         self.rec.test_events = []
+        self.rec.stem = None
 
     def pytest_sessionfinish(self, session, exitstatus):
         self.rec.emit("run_end", exitstatus=int(exitstatus))
@@ -743,7 +860,7 @@ class Plugin:
 
     def pytest_terminal_summary(self, terminalreporter):
         if self.md_path:
-            terminalreporter.write_line(f"test log: {self.md_path}")
+            terminalreporter.write_line(f"test logs: {self.md_path.parent}/")
         elif self.render_error:
             terminalreporter.write_line(f"test log: rendering failed ({self.render_error}); "
                                         f"events in {self.rec.jsonl_path}")
@@ -783,7 +900,8 @@ class Plugin:
             from pytest_html import extras
         except Exception:
             return
-        text = testlog_render.render_test(list(self.rec.test_events))
+        # the test has not ended yet (its end event comes after this report): render it as finished
+        text = testlog_render.render_test(list(self.rec.all_events), self.rec.test, finished=True)
         block = f"<details><summary>Test log</summary><pre>{html.escape(text)}</pre></details>"
         report.extras = list(getattr(report, "extras", None) or []) + [extras.html(block)]
 
@@ -797,6 +915,9 @@ def _test_info(item):
         pass
     fn = getattr(item, "function", None)
     info["doc"] = inspect.getdoc(fn) if fn is not None else None
+    mod = getattr(item, "module", None)
+    mdoc = inspect.getdoc(mod) if mod is not None else None
+    info["mdoc"] = mdoc.strip().splitlines()[0] if mdoc else None    # shown when the test has no docstring
     marks = []
     for m in item.iter_markers():
         if m.name not in marks and m.name not in ("parametrize", "usefixtures", "xfail", "filterwarnings"):
@@ -846,6 +967,107 @@ def _where(excinfo):
     except Exception:
         pass
     return {"file": str(best.path), "line": best.lineno + 1, "src": _cut(src, 300)}
+
+
+_YIELD_AT = {}
+
+
+def _first_yield(code):
+    """Offset of the first yield in a generator's code (-1 if none); cached per code object."""
+    off = _YIELD_AT.get(code)
+    if off is None:
+        off = -1
+        try:
+            for ins in dis.get_instructions(code):
+                if ins.opname == "YIELD_VALUE":
+                    off = ins.offset
+                    break
+        except Exception:
+            pass
+        _YIELD_AT[code] = off
+    return off
+
+
+def _simple(v, depth=0):
+    """True for values worth showing as a helper argument (not objects like npu or a dataplane)."""
+    if v is None or isinstance(v, (bool, int, float, str, enum.Enum)):
+        return True
+    if depth == 0 and isinstance(v, (list, tuple, dict)) and len(v) <= 8:
+        items = list(v.items()) if isinstance(v, dict) else [(None, x) for x in v]
+        return all(_simple(k, 1) and _simple(x, 1) for k, x in items)
+    return False
+
+
+def _helper_name(code):
+    mod = os.path.splitext(os.path.basename(code.co_filename))[0]
+    qual = getattr(code, "co_qualname", code.co_name).replace("<locals>.", "")
+    return qual if mod == "conftest" or mod.startswith("test_") else f"{mod}.{qual}"
+
+
+def _site():
+    """Where the current call comes from: the test line, and the tests/poc helpers between the test and
+    the call (outermost first) with their simple arguments. A generator helper (a context manager or a
+    fixture) that has passed its yield is marked "exit": it is undoing what it set up."""
+    try:
+        frame = sys._getframe(1)
+        chain = []                                   # tests/poc frames, innermost first
+        for _ in range(300):
+            if frame is None:
+                break
+            path = frame.f_code.co_filename
+            if path.startswith(POC_DIRS) and not os.path.basename(path).startswith("testlog"):
+                chain.append(frame)
+            frame = frame.f_back
+        test_i = None
+        for i, f in enumerate(chain):
+            if os.path.basename(f.f_code.co_filename).startswith("test_") and f.f_code.co_name.startswith("test"):
+                test_i = i                           # the outermost one is the test function
+        site = {}
+        if test_i is not None:
+            t = chain[test_i]
+            site.update(file=os.path.basename(t.f_code.co_filename), line=t.f_lineno,
+                        src=_cut(linecache.getline(t.f_code.co_filename, t.f_lineno).strip(), 200))
+        helpers = []
+        for f in reversed(chain if test_i is None else chain[:test_i]):
+            code = f.f_code
+            h = {"fn": _helper_name(code), "fid": id(f)}
+            names = code.co_varnames[:code.co_argcount + code.co_kwonlyargcount]
+            loc = f.f_locals
+            h["args"] = [[n, _j(loc[n])] for n in names
+                         if n not in SITE_SKIP_ARGS and n in loc and _simple(loc[n])]
+            if code.co_flags & CO_GENERATOR:
+                h["gen"] = True
+                first = _first_yield(code)
+                if first >= 0 and f.f_lasti > first:
+                    h["exit"] = True
+            helpers.append(h)
+        site["helpers"] = helpers[-6:]
+        return site
+    except Exception:
+        return None
+
+
+def _testbed_info(testbed, npu, dp):
+    """The test bed as the run saw it: names, SAI target and client, traffic mode, dataplane ports."""
+    info = {"name": getattr(testbed, "name", None)}
+    try:
+        if npu is not None:
+            cfg = getattr(npu, "cfg", None) or {}
+            client = getattr(npu, "sai_client", None)
+            sku = getattr(npu, "sku", None)
+            info.update(target=getattr(npu, "target", None), asic=getattr(npu, "name", None),
+                        sku=sku if sku is None or isinstance(sku, str) else "(sku config)",
+                        client_type=(cfg.get("client") or {}).get("type"),
+                        client=type(client).__name__ if client is not None else None,
+                        run_traffic=getattr(npu, "run_traffic", None))
+        if dp is not None:
+            cfg = getattr(dp, "config", None) or {}
+            info["dataplane"] = {"type": cfg.get("type"), "mode": cfg.get("mode"),
+                                 "ports": [[g.get("alias"), g.get("name")] for g in cfg.get("port_groups") or []
+                                           if isinstance(g, dict)]}
+    except Exception:
+        pass
+    return info
 
 
 def _environment(config):

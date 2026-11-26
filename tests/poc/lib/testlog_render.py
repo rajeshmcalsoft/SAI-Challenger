@@ -1,4 +1,5 @@
-"""Render a PoC test log (<run>.events.jsonl) as Markdown and as a sairedis.rec-style file.
+"""Render a PoC run's events (<run>.events.jsonl) as one plain-text log per test, an index, and a
+sairedis.rec-style file.
 
 PYTEST_DONT_REWRITE: pytest must not rewrite this module (it contains no assert statements).
 
@@ -7,8 +8,13 @@ after an interrupted run:
 
     python3 -I tests/poc/lib/testlog_render.py tests/poc/reports/<run>.events.jsonl
 
-writes <run>.testlog.md and <run>.rec next to the .jsonl. tests/poc/lib/testlog.py writes the events.
+writes, next to the .jsonl:
+    <run>/<profile>-<mmdd-hhmm>_<NN>_<test>.log   one per test, in run order
+    <run>/<profile>-<mmdd-hhmm>_index.log         the run header and one line per test
+    <run>.rec                                     every SAI call in sairedis.rec grammar
+tests/poc/lib/testlog.py writes the events.
 """
+import collections
 import itertools
 import json
 import re
@@ -21,10 +27,20 @@ PROBE = "SAI_STATUS_BUFFER_OVERFLOW"
 SESSION_SCOPES = ("session", "package")
 OID_RE = re.compile(r"oid:0x[0-9a-fA-F]+")
 ATTR_TYPE_RE = re.compile(r"SAI_([A-Z0-9_]+?)_ATTR_")
+ATTR_RE = re.compile(r"^SAI_([A-Z0-9_]+?)_ATTR_([A-Z0-9_]+)$")
+LIST_RE = re.compile(r"^(\d+):(oid:|SAI_|null$|$)")
+STAMP_RE = re.compile(r"^(.*-\d{4}-\d{4})\d{2}$")
 MAX_VALUE = 160
-MAX_LINE_LIST = 12
+VALUE_W = 48            # longest value shown in a step line
+RESULT_COL_MAX = 92     # results are aligned to a column, at most this far right
+LABEL_W = 17
 
 RESULT_ORDER = ("Interrupted", "Fail", "Setup error", "Cleanup error", "Gap now passes", "Expected gap", "Skipped", "Pass")
+CLIENT_PATH = {"SaiRedisClient": "Redis ASIC_STATE queue -> syncd -> libsai",
+               "SaiThriftClient": "Thrift RPC -> saiserver -> libsai"}
+WHY_TITLE = {"Fail": "FAILED", "Expected gap": "EXPECTED GAP", "Gap now passes": "GAP NOW PASSES",
+             "Skipped": "SKIPPED", "Setup error": "SETUP ERROR", "Cleanup error": "CLEANUP ERROR",
+             "Interrupted": "INTERRUPTED"}
 
 
 # ---------------------------------------------------------------- loading
@@ -61,10 +77,6 @@ def _pairs(seq):
     return [(str(seq[i]), seq[i + 1]) for i in range(0, len(seq) - 1, 2)]
 
 
-def _names(seq):
-    return [k for k, _ in _pairs(seq)]
-
-
 def _short(text, limit=MAX_VALUE):
     text = str(text)
     return text if len(text) <= limit else text[:limit] + f"…(+{len(text) - limit})"
@@ -89,13 +101,14 @@ def _ts(ev):
     return float(ev.get("ts") or 0.0)
 
 
+def _clock(ts):
+    """Wall-clock time of an event, HH:MM:SS.mmm (local time, as in the .rec)."""
+    return time.strftime("%H:%M:%S", time.localtime(ts)) + f".{round((ts % 1) * 1000) % 1000:03d}"
+
+
 def _rec_time(ts):
     lt = time.localtime(ts)
     return time.strftime("%Y-%m-%d.%H:%M:%S.", lt) + f"{round((ts % 1) * 1e6) % 1000000:06d}"
-
-
-def _status_short(status):
-    return status if status else "?"
 
 
 def _rel(path):
@@ -105,27 +118,186 @@ def _rel(path):
     return m.group(1) if m else path
 
 
-# ---------------------------------------------------------------- SAI events
+def _base(path):
+    return str(path or "?").replace("\\", "/").rsplit("/", 1)[-1]
+
+
+def _plural(n, word):
+    return f"{n} {word}" + ("" if n == 1 else "s")
+
+
+def _align(rows, cap=RESULT_COL_MAX):
+    """rows: (left, right or None). The rights are lined up in one column."""
+    widths = [len(left) for left, right in rows if right is not None and len(left) + 3 <= cap]
+    col = max(widths) + 3 if widths else 0
+    out = []
+    for left, right in rows:
+        if right is None:
+            out.append(left.rstrip())
+        elif len(left) + 3 > col:
+            out.append(f"{left}   {right}")
+        else:
+            out.append(left.ljust(col) + right)
+    return out
+
+
+def _wrap(words, width, first, rest):
+    """Join words into lines of at most width characters; first/rest are the line prefixes."""
+    lines, cur, empty = [], first, True
+    for w in words:
+        if not empty and len(cur) + 1 + len(w) > width:
+            lines.append(cur.rstrip())
+            cur, empty = rest, True
+        cur = cur + w if empty else cur + " " + w
+        empty = False
+    if not empty:
+        lines.append(cur.rstrip())
+    return lines
+
+
+def file_stem(run, index, width, name):
+    """Base name of a test's files: <profile>-<mmdd-hhmm>_<NN>_<test>. The run name carries seconds
+    (<profile>-<mmdd-hhmmss>); the files leave them out."""
+    run = str(run or "run")
+    m = STAMP_RE.match(run)
+    prefix = m.group(1) if m else run
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(name))
+    return f"{prefix}_{int(index):0{int(width)}d}_{safe}"
+
+
+def index_name(run):
+    run = str(run or "run")
+    m = STAMP_RE.match(run)
+    return f"{m.group(1) if m else run}_index.log"
+
+
+# ---------------------------------------------------------------- short SAI names
+
+def split_attr(name):
+    """'SAI_VLAN_MEMBER_ATTR_VLAN_ID' -> ('VLAN_MEMBER', 'VLAN_ID'); anything else -> (None, name)."""
+    m = ATTR_RE.match(str(name))
+    return (m.group(1), m.group(2)) if m else (None, str(name))
+
+
+def short_attr(name):
+    return split_attr(name)[1]
+
+
+def _enum_short(value, attr):
+    """Drop the enum type from a value, using its attribute's name: SAI_VLAN_TAGGING_MODE_UNTAGGED for
+    VLAN_MEMBER.VLAN_TAGGING_MODE -> UNTAGGED, SAI_FDB_ENTRY_TYPE_STATIC for FDB_ENTRY.TYPE -> STATIC."""
+    typ, short = split_attr(attr)
+    words = short.split("_")
+    if len(words) > 1 and words[-1] == "LIST":
+        words = words[:-1]
+    prefixes = []
+    for i in range(len(words)):
+        tail = "_".join(words[i:])
+        prefixes.append(f"SAI_{tail}_")
+        if typ:
+            prefixes.append(f"SAI_{typ}_{tail}_")
+    for p in sorted(prefixes, key=len, reverse=True):
+        if value.startswith(p) and len(value) > len(p):
+            return value[len(p):]
+    return None
+
+
+# Per-run caches for the pytest-html block, which renders one test at a time from the events so far:
+# events never change once written, so what was learned from earlier events is kept.
+_CACHE = {}
+
+
+def _run_cache(run):
+    if len(_CACHE) > 4 and run not in _CACHE:
+        _CACHE.clear()
+    return _CACHE.setdefault(run, {"enums_upto": 0, "enums": {}, "init": {}, "types_upto": 0, "types": {}, "seen": {}})
+
+
+def learn_enums(events, cache=None):
+    """Short names for every enum value sent with an attribute in this run (used where a value
+    appears without its attribute, e.g. npu.create_vlan_member(..., SAI_VLAN_TAGGING_MODE_TAGGED))."""
+    enums = cache["enums"] if cache is not None else {}
+    upto = cache["enums_upto"] if cache is not None else 0
+    for e in events:
+        if e.get("k") != "sai" or e.get("seq", 0) <= upto:
+            continue
+        args = e.get("args") or {}
+        for k, v in _pairs(args.get("attrs", args.get("attr"))):
+            for item in _list_items(v):
+                if isinstance(item, str) and item.startswith("SAI_") and item not in enums:
+                    s = _enum_short(item, k)
+                    if s:
+                        enums[item] = s
+    if cache is not None and events:
+        cache["enums_upto"] = max(upto, events[-1].get("seq", 0))
+    return enums
+
+
+def learn_types(events, cache=None):
+    """Object type of each OID, from what the run shows about it: the key of the create that made it, or
+    the SAI_<TYPE>_ATTR_ names of a get or set on it. Some clients (thrift) send a remove with the OID
+    only; this names what they removed. OIDs seen only in removes stay without a type."""
+    types = cache["types"] if cache is not None else {}
+    seen = cache["seen"] if cache is not None else {}       # oid -> "TYPE.ATTR" it was first read from
+    upto = cache["types_upto"] if cache is not None else 0
+    for e in events:
+        if e.get("k") != "sai" or e.get("seq", 0) <= upto or e.get("op") in ("flush_fdb_entries", "cleanup"):
+            continue
+        v = sai_view(e)
+        if not v["typ"]:
+            continue
+        for k, val in v["read"]:
+            for item in _list_items(val) if isinstance(val, str) else []:
+                if isinstance(item, str) and item.startswith("oid:") and item != "oid:0x0":
+                    seen.setdefault(item, f"{v['typ']}.{short_attr(k)}")
+        oid = v["created"] or v["ident"]
+        if isinstance(oid, str) and oid.startswith("oid:"):
+            types.setdefault(oid, v["typ"])
+    if cache is not None and events:
+        cache["types_upto"] = max(upto, events[-1].get("seq", 0))
+    return types
+
+
+def _list_items(v):
+    if not isinstance(v, str):
+        return [v]
+    m = LIST_RE.match(v)
+    if m:
+        body = v[len(m.group(1)) + 1:]
+        return [x for x in body.split(",") if x and x != "null"]
+    return [v]
+
 
 class Names:
-    """OID -> readable name: baseline aliases from the recorder plus TYPE#n for objects a test creates."""
+    """Readable names: baseline aliases (switch, port[i], bp[i], default_vlan, ...) from the recorder,
+    TYPE#n for objects a test creates, and short attribute and enum names."""
 
-    def __init__(self, aliases=None):
+    def __init__(self, aliases=None, enums=None):
         self.base = dict(aliases or {})
         self.local = {}
-        self.types = {}       # oid -> object type (from creates and alias kinds)
+        self.types = {}       # oid -> object type (from creates)
         self.counts = {}
         self.shown = set()
+        self.enums = enums if enums is not None else {}
+        self.extra = {}       # oid -> name of the switch attribute it was read from (e.g. cpu_port)
+
+    def learn_switch_values(self, seen):
+        """OIDs the run read from a single-value switch attribute get that attribute's name."""
+        for oid, src in seen.items():
+            if src.startswith("SWITCH.") and not src.endswith("_LIST"):
+                self.extra.setdefault(oid, src.split(".", 1)[1].lower())
 
     def set_base(self, aliases):
         self.base = merge_aliases(self.base, aliases)
 
-    def created(self, typ, oid, baseline=False):
+    def created(self, typ, oid):
         if not oid or not isinstance(oid, str) or not oid.startswith("oid:"):
             return None
         if oid in self.base:
             self.types[oid] = typ
             return self.base[oid]
+        if oid in self.local:
+            return self.local[oid]
         self.counts[typ] = self.counts.get(typ, 0) + 1
         name = f"{typ or 'OBJ'}#{self.counts[typ]}"
         self.local[oid] = name
@@ -133,22 +305,111 @@ class Names:
         return name
 
     def name(self, oid, first_use=False):
-        name = self.local.get(oid) or self.base.get(oid)
+        name = self.local.get(oid) or self.base.get(oid) or self.extra.get(oid)
         if not name:
             return oid
+        if oid in self.extra and oid not in self.local and oid not in self.base and oid not in self.shown:
+            self.shown.add(oid)
+            return f"{name} {oid}"
         if first_use and oid in self.local and oid not in self.shown:
             self.shown.add(oid)
-            return f"{name}({oid})"
+            return f"{name} {oid}"
         return name
 
-    def value(self, value):
-        """Format a SAI value, replacing known OIDs by their names."""
-        if isinstance(value, (list, dict)):
-            value = json.dumps(value, separators=(",", ":"))
-        text = OID_RE.sub(lambda m: self.local.get(m.group(0)) or self.base.get(m.group(0)) or m.group(0),
-                          str(value))
-        return _short(text)
+    def enum(self, s, attr=None):
+        if s.startswith("SAI_STATUS_"):
+            return s[len("SAI_STATUS_"):]
+        if s.startswith("SAI_OBJECT_TYPE_"):
+            return s[len("SAI_OBJECT_TYPE_"):]
+        if s in self.enums:
+            return self.enums[s]
+        if attr:
+            short = _enum_short(s, attr)
+            if short:
+                self.enums[s] = short
+                return short
+        return s
 
+    def obj(self, v):
+        """An object argument: an OID, 'SAI_OBJECT_TYPE_X:<oid or entry key>', or an entry key."""
+        if isinstance(v, dict):
+            return self.entry(v)
+        if isinstance(v, str):
+            if v.startswith("SAI_OBJECT_TYPE_"):
+                typ, rest = _type_of_key(v)
+                if rest and rest.startswith("{"):
+                    return self.entry(rest, typ)
+                if rest and rest.startswith("oid:"):
+                    return self.name(rest)
+                return typ
+            if v.startswith("{"):
+                return self.entry(v)
+        return self.value(v)
+
+    def entry(self, key, typ=None):
+        """An entry key ({"bvid": .., "mac": .., "switch_id": ..}) as TYPE(value, value)."""
+        if isinstance(key, str):
+            try:
+                key = json.loads(key)
+            except ValueError:
+                return f"{typ or 'ENTRY'}({_short(key, VALUE_W)})"
+        if not isinstance(key, dict):
+            return str(key)
+        vals = [self.value(v) for k, v in key.items() if k != "switch_id"]
+        return f"{typ}(" + ", ".join(vals) + ")" if typ else "(" + ", ".join(vals) + ")"
+
+    def value(self, v, attr=None, limit=VALUE_W):
+        if v is None:
+            return "None"
+        if isinstance(v, bool):
+            return "true" if v else "false"
+        if isinstance(v, (int, float)):
+            return str(v)
+        if isinstance(v, dict):
+            if "_saidata" in v:
+                return ", ".join(f"{short_attr(k)}={self.value(x, k)}" for k, x in _pairs(v["_saidata"]))
+            return self.entry(v)
+        if isinstance(v, list):
+            shown = [self.value(x, attr) for x in v[:6]]
+            return "[" + ", ".join(shown) + (", …" if len(v) > 6 else "") + "]"
+        s = str(v)
+        m = LIST_RE.match(s)
+        if m:
+            n = int(m.group(1))
+            items = _list_items(s)
+            if n == 0:
+                return "[]"
+            if n <= 3 and len(items) == n:
+                return "[" + ", ".join(self.value(x, attr) for x in items) + "]"
+            return f"list of {n}"
+        if s.startswith("oid:"):
+            return self.name(s)
+        if s.startswith("SAI_OBJECT_TYPE_") and ":" in s:
+            return self.obj(s)
+        if s.startswith("SAI_"):
+            return self.enum(s, attr)
+        if s.startswith("{"):
+            return self.entry(s)
+        text = OID_RE.sub(lambda mm: self.local.get(mm.group(0)) or self.base.get(mm.group(0)) or mm.group(0), s)
+        return _short(text, limit)
+
+    def attrs(self, pairs, values=True):
+        if values:
+            return " ".join(f"{short_attr(k)}={self.value(v, k)}" for k, v in pairs)
+        return ", ".join(short_attr(k) for k, _ in pairs)
+
+
+def merge_aliases(old, new):
+    """Alias map after an 'aliases' event. A switch re-init reports partial maps while the lists
+    fill in, so known names are kept; a name that now points to another OID drops the old one."""
+    new = dict(new or {})
+    moved = set(new.values())
+    merged = {oid: name for oid, name in (old or {}).items() if name not in moved}
+    merged.update(new)
+    return merged
+
+
+# ---------------------------------------------------------------- SAI client calls
 
 def sai_view(ev):
     """Normalise one 'sai' event into display fields (works for both wire-event shapes)."""
@@ -209,75 +470,6 @@ def sai_view(ev):
     return view
 
 
-def sai_line(view, names, baseline=False):
-    """One readable line for a SAI call (the caller adds the time offset)."""
-    op, typ = view["op"], view["typ"]
-    status = view["status"]
-    if op == "cleanup":
-        return "switch reset (SAI client cleanup: target state flushed)"
-    ident = view["ident"]
-    if isinstance(ident, str) and ident.startswith("oid:"):
-        # a type seen earlier for the same OID (some clients send only the OID)
-        if typ:
-            names.types.setdefault(ident, typ)
-        else:
-            typ = view["typ"] = names.types.get(ident)
-    if op == "create" and view["created"] and status == OK:
-        names.created(typ, view["created"])
-        target = names.name(view["created"], first_use=True)
-    elif isinstance(ident, str) and ident.startswith("oid:"):
-        known = names.local.get(ident) or names.base.get(ident)
-        target = known or (f"{typ} {ident}" if typ else ident)
-    elif ident:
-        target = f"{typ or ''} {names.value(ident)}".strip()
-    else:
-        target = typ or "?"
-    if op == "create" and not (view["created"] and status == OK):
-        target = f"{typ or ''} {names.value(ident) if ident and not str(ident).startswith('oid:') else ''}".strip()
-
-    parts = [op, target]
-    if op in ("create", "set", "flush_fdb_entries"):
-        parts += [f"{k}={names.value(v)}" for k, v in view["attrs"]]
-    elif op in ("get", "get_stats", "clear_stats", "get_availability") and not (
-            view["read"] and status in (OK, None)):
-        attr_names = [k for k, _ in view["attrs"]]
-        if len(attr_names) > MAX_LINE_LIST:
-            attr_names = attr_names[:MAX_LINE_LIST] + [f"…(+{len(view['attrs']) - MAX_LINE_LIST})"]
-        parts += attr_names
-    elif op.startswith("bulk_"):
-        keys = view["ev"].get("args", {}).get("keys")
-        parts.append(f"({len(keys) if isinstance(keys, list) else '?'} objects)")
-    line = " ".join(str(p) for p in parts if p != "")
-    if status:
-        line += f" -> {status}"
-    elif op not in ("cleanup",) and not view["exc"]:
-        line += " -> (no status returned by the client)"
-    if view["read"] and status in (OK, None):
-        shown = view["read"][:MAX_LINE_LIST]
-        line += " : " + ", ".join(f"{k}={names.value(v)}" for k, v in shown)
-        if len(view["read"]) > MAX_LINE_LIST:
-            line += f", …(+{len(view['read']) - MAX_LINE_LIST})"
-    exc = view["exc"]
-    if exc:
-        line += f"  !! raised {exc.get('type')}: {_first_line(exc.get('msg'), 160)}"
-    return line
-
-
-def merge_aliases(old, new):
-    """Alias map after an 'aliases' event. A switch re-init reports partial maps while the lists
-    fill in, so known names are kept; a name that now points to another OID drops the old one."""
-    new = dict(new or {})
-    moved = set(new.values())
-    merged = {oid: name for oid, name in (old or {}).items() if name not in moved}
-    merged.update(new)
-    return merged
-
-
-def _sig(view):
-    """Grouping signature for repeated session calls (ignores which object)."""
-    return (view["op"], view["typ"], tuple(k for k, _ in view["attrs"]), view["status"], bool(view["exc"]))
-
-
 def _probes(views):
     """Size probes: a BUFFER_OVERFLOW get followed by the same get. Returns the probe keys and
     marks the real get with 'after_probe'. views: [(key, view)] in call order."""
@@ -290,110 +482,74 @@ def _probes(views):
     return skip
 
 
-def _view_type(view, names):
-    ident = view["ident"]
-    return view["typ"] or (names.types.get(ident) if isinstance(ident, str) else None) \
-        or _alias_type(names, ident) or "?"
+def _okey(ident):
+    """One spelling for an object: an OID, or an entry key as sorted compact JSON."""
+    if isinstance(ident, str) and ident.startswith("{"):
+        try:
+            ident = json.loads(ident)
+        except ValueError:
+            return ident
+    if isinstance(ident, dict):
+        return json.dumps(ident, sort_keys=True, separators=(",", ":"))
+    return str(ident)
 
 
-def _attr_short(name, typ):
-    return name.removeprefix(f"SAI_{typ}_ATTR_")
-
-
-MAX_CYCLE = 12
-
-
-def _collapse(items, names, indent="  "):
-    """Lines for SAI calls [(offset, view, text)], in order; each call stays in the .rec.
-    - A run of more than 3 successful gets becomes one line with a count per type and attribute.
-    - A block of calls repeated 3 or more times with the same ops, attributes and statuses (only
-      the objects differ) shows its first and last rounds and the number of rounds between."""
-    units, run = [], []      # unit: (shape, lines)
-
-    def get_ok(v):
-        return v["op"] == "get" and v["status"] == OK and not v["exc"]
-
-    def flush():
-        if len(run) <= 3:
-            units.extend(((v["op"], v["typ"], tuple(k for k, _ in v["attrs"]), v["status"]),
-                          [f"{indent}{off} {text}"]) for off, v, text in run)
-        else:
-            counts = {}
-            for _, v, _ in run:
-                typ = _view_type(v, names)
-                key = f"{typ} " + ",".join(_attr_short(k, typ) for k, _ in v["attrs"])
-                counts[key] = counts.get(key, 0) + 1
-            block = [f"{indent}{run[0][0]} get ×{len(run)}, all {OK} (grouped; each call is in the .rec):"]
-            block.extend(f"{indent}{'':9}   {key} ×{n}" for key, n in counts.items())
-            units.append((("gets",), block))
-        run.clear()
-
-    for off, v, text in items:
-        if get_ok(v):
-            run.append((off, v, text))
-            continue
-        flush()
-        units.append(((v["op"], v["typ"], tuple(k for k, _ in v["attrs"]), v["status"], bool(v["exc"])),
-                      [f"{indent}{off} {text}"]))
-    flush()
-
-    shapes = [s for s, _ in units]
-    lines, i = [], 0
-    while i < len(units):
-        best = None          # (units covered, cycle length, rounds)
-        for size in range(1, MAX_CYCLE + 1):
-            rounds = 1
-            while shapes[i + rounds * size:i + (rounds + 1) * size] == shapes[i:i + size]:
-                rounds += 1
-            if rounds >= 3 and (best is None or rounds * size > best[0]):
-                best = (rounds * size, size, rounds)
-        if best is None:
-            lines.extend(units[i][1])
-            i += 1
-            continue
-        _, size, rounds = best
-        for u in units[i:i + size]:
-            lines.extend(u[1])
-        if size == 1:
-            lines.append(f"{indent}{'':9} … {rounds - 2} more calls like this (same op, attributes and status; "
-                         "other objects) …")
-        else:
-            lines.append(f"{indent}{'':9} … {rounds - 2} more rounds of these {size} calls (same ops, "
-                         "attributes and statuses; other objects) …")
-        for u in units[i + (rounds - 1) * size:i + rounds * size]:
-            lines.extend(u[1])
-        i += rounds * size
-    return lines
+def _sai_text(v, names):
+    """A SAI client call made outside any npu function: op, object, attributes."""
+    op, typ = v["op"], v["typ"] or "?"
+    ident = v["ident"]
+    if op == "create" and v["created"] and v["status"] == OK:
+        target = ""
+    elif isinstance(ident, str) and ident.startswith("oid:"):
+        target = names.name(ident)
+    elif ident:
+        target = names.entry(ident)
+    else:
+        target = ""
+    if op in ("create", "set", "flush_fdb_entries"):
+        rest = names.attrs(v["attrs"])
+    elif op in ("get", "get_stats", "clear_stats", "get_availability"):
+        rest = names.attrs(v["attrs"], values=False)
+    else:
+        rest = ""
+    return " ".join(x for x in (op, typ, target, rest) if x)
 
 
 # ---------------------------------------------------------------- packets
 
 def _ports(ports):
-    if not ports:
+    if not ports and ports != 0:
         return "-"
     if not isinstance(ports, list):
         return str(ports)
     out = []
     for p in ports:
         out.append(str(p[1]) if isinstance(p, list) and len(p) == 2 else str(p))
-    return ",".join(out)
+    return ", ".join(out)
+
+
+def _port_word(ports):
+    text = _ports(ports)
+    return ("ports " if "," in text else "port ") + text
 
 
 def _pkt(p):
     if not isinstance(p, dict):
         return str(p)
     tag = " [MLD]" if p.get("mld") else ""
-    return f"{p.get('len', '?')}B {p.get('sum', '?')}{tag}"
+    text = str(p.get("sum", "?")).replace(" IPv4 ", " ").replace(" IPv6 ", " ")
+    text = text.removesuffix(" [S]")
+    return f"{p.get('len', '?')}B {text}{tag}"
 
 
-def _hexdump(hx, limit=256):
+def _hexdump(hx, limit=64):
     if not hx:
         return []
     raw = hx[: limit * 2]
     lines = []
     for off in range(0, len(raw), 32):
         chunk = raw[off:off + 32]
-        lines.append(f"      {off // 2:04x}  " + " ".join(chunk[i:i + 2] for i in range(0, len(chunk), 2)))
+        lines.append(f"{off // 2:04x}  " + " ".join(chunk[i:i + 2] for i in range(0, len(chunk), 2)))
     return lines
 
 
@@ -444,640 +600,1071 @@ def _skip_reason(rep):
     return _first_line(lr)
 
 
-# ---------------------------------------------------------------- one test
-
-def _split_test(events):
-    """Separate a test's events into its own steps and session-fixture work (init, final teardown)."""
-    own, session, buffer = [], [], []
-    for ev in events:
-        phase, kind = ev.get("phase"), ev.get("k")
-        if phase == "setup" and ev.get("fxs") in SESSION_SCOPES:
-            session.append(ev)
-        elif phase == "teardown" and kind == "fixture_done":
-            # events since the previous marker belong to the fixture that just finished
-            (session if ev.get("scope") in SESSION_SCOPES else own).extend(buffer)
-            buffer = []
-        elif phase == "teardown" and kind in ("sai", "wire", "send", "poll", "aliases", "note"):
-            buffer.append(ev)
-        else:
-            own.append(ev)
-    own.extend(buffer)
-    own.sort(key=lambda e: e.get("seq", 0))
-    return own, session
-
-
-def analyse_test(events, aliases):
-    """Everything the Markdown section and the index need for one test."""
-    test_ev = next((e for e in events if e.get("k") == "test"), {}) or {}
-    reports = {}
-    for e in events:
-        if e.get("k") == "report":
-            reports[e.get("when")] = e
-    own, session = _split_test(events)
-    result, detail = outcome(test_ev, reports)
-    if not any(e.get("k") == "test_end" for e in events):
-        # the run stopped inside this test (Ctrl-C ends pytest at once: the PTF dataplane restores
-        # the default SIGINT action), so the result pytest would have given is unknown
-        done = [f"{w} {reports[w].get('outcome')}" for w in ("setup", "call", "teardown") if w in reports]
-        result = "Interrupted"
-        detail = "the run stopped before this test finished" + (f" (done: {', '.join(done)})" if done else "")
-    duration = sum(float(r.get("dur") or 0) for r in reports.values())
-    return {"test": test_ev, "reports": reports, "own": own, "session": session,
-            "result": result, "detail": detail, "duration": duration, "aliases": aliases}
-
-
-def _failing_report(info):
+def _failing_report(reports):
     for when in ("setup", "call", "teardown"):
-        rep = info["reports"].get(when)
+        rep = reports.get(when)
         if rep and (rep.get("outcome") == "failed" or rep.get("wasxfail") is not None) \
                 and (rep.get("exc") or rep.get("longrepr")):
             return rep
     return None
 
 
-def render_test(events, aliases=None, number=None, anchor=None):
-    """Markdown section for one test (also used, as plain text, in the pytest-html report)."""
-    info = analyse_test(events, aliases)
-    return _render_info(info, number=number, anchor=anchor)[0]
+# ---------------------------------------------------------------- the run
+
+class Run:
+    """Everything a test's log needs from the whole run: header, test bed, aliases, switch inits."""
+
+    def __init__(self, events):
+        self.events = events
+        self.header = next((e for e in events if e.get("k") == "session"), {}) or {}
+        self.testbed = next((e for e in events if e.get("k") == "testbed"), {}) or {}
+        self.run_end = next((e for e in events if e.get("k") == "run_end"), None)
+        self.collected = next((e.get("n") for e in events if e.get("k") == "collected"), None)
+        self.clients = sorted({str(e.get("cls")) for e in events if e.get("k") == "client"})
+        self.cache = _run_cache(self.header.get("run"))
+        self.enums = dict(learn_enums(events, self.cache))
+        self.types = dict(learn_types(events, self.cache))
+        self.seen = self.cache["seen"]
+        self.npu = {e["id"]: e for e in events if e.get("k") == "npu" and e.get("id") is not None}
+        self.order, self.by_test, self.alias_start, self.alias_body = [], {}, {}, {}
+        aliases, dvid = {}, None
+        for e in events:
+            if e.get("k") == "aliases":
+                aliases = merge_aliases(aliases, e.get("map"))
+                if e.get("default_vlan_id") not in (None, "", "0"):
+                    dvid = e.get("default_vlan_id")
+            nodeid = e.get("test")
+            if not nodeid:
+                continue
+            if nodeid not in self.by_test:
+                self.order.append(nodeid)
+                self.by_test[nodeid] = []
+                self.alias_start[nodeid] = dict(aliases)
+            self.by_test[nodeid].append(e)
+            if nodeid not in self.alias_body and e.get("phase") in ("call", "teardown"):
+                self.alias_body[nodeid] = (dict(aliases), dvid)
+        for nodeid in self.order:
+            self.alias_body.setdefault(nodeid, (dict(aliases), dvid))
+        self.tests = {}
+        for i, nodeid in enumerate(self.order, 1):
+            t = next((e for e in self.by_test[nodeid] if e.get("k") == "test"), {}) or {}
+            self.tests[nodeid] = {"ev": t, "index": t.get("index") or i}
+        self.blocks = self._init_blocks()
+        self.in_block = {e.get("seq") for b in self.blocks for e in b["events"]}
+        self.block_roots = {b["root"] for b in self.blocks if b["root"] is not None}
+        aliases, pending = {}, list(self.blocks)
+        for e in events:
+            if pending and e.get("seq", 0) > pending[0]["events"][-1].get("seq", 0) and e.get("k") != "aliases":
+                pending.pop(0)["aliases"] = dict(aliases)
+            if e.get("k") == "aliases":
+                aliases = merge_aliases(aliases, e.get("map"))
+        for b in pending:
+            b["aliases"] = dict(aliases)
+
+    def root(self, npu_id):
+        """The top-level npu call an npu call (or a SAI call's npu id) belongs to."""
+        seen = 0
+        while npu_id is not None and seen < 100:
+            parent = (self.npu.get(npu_id) or {}).get("parent")
+            if parent is None:
+                return npu_id
+            npu_id, seen = parent, seen + 1
+        return npu_id
+
+    def _init_blocks(self):
+        """Switch inits: a client reset ('cleanup') and the calls after it, until the work that did it
+        ends (the same npu call, e.g. npu.reset(), or the same test, phase and fixture)."""
+        blocks, cur = [], None
+        for e in self.events:
+            if e.get("k") != "sai":
+                continue
+            root = self.root(e.get("npu"))
+            ctx = (e.get("test"), e.get("phase"), e.get("fx"))
+            start = e.get("op") == "cleanup" and not e.get("depth") and e.get("phase") in ("setup", "call")
+            if not start and cur is None and not blocks and e.get("fx") == "testbed_instance":
+                start = True
+            if start:
+                cur = {"root": root, "ctx": ctx, "events": [e]}
+                blocks.append(cur)
+                continue
+            if cur is not None:
+                if (cur["root"] is not None and root == cur["root"]) or (cur["root"] is None and root is None
+                                                                         and ctx == cur["ctx"]):
+                    cur["events"].append(e)
+                    continue
+                cur = None
+        good = []
+        for b in blocks:
+            creates = [sai_view(e) for e in b["events"] if e.get("op") == "create"]
+            if any(v["typ"] == "SWITCH" for v in creates):
+                first = b["events"][0]
+                b.update(test=first.get("test"), phase=first.get("phase"), fx=first.get("fx"), ts=_ts(first),
+                         seq=first.get("seq", 0))
+                good.append(b)
+        return good
+
+    def block_for(self, nodeid):
+        """The switch init this test ran on: the last one that started before its test body."""
+        events = self.by_test.get(nodeid) or []
+        body = next((e for e in events if e.get("phase") == "call"), None) or (events[-1] if events else None)
+        limit = (body or {}).get("seq", 0)
+        found = None
+        for b in self.blocks:
+            if b["seq"] < limit:
+                found = b
+        return found
 
 
-def _render_info(info, number=None, anchor=None):
-    t = info["test"]
-    names = Names(info["aliases"])
-    out = []
-    title = t.get("name") or t.get("nodeid") or "?"
-    head = f"### {number}. {title}" if number else f"### {title}"
-    if anchor:
-        out.append(f'<a id="{anchor}"></a>')
-    out.append(f"{head} · {info['result']}")
-    out.append("")
-    doc = (t.get("doc") or "").strip()
-    first = doc.splitlines()[0] if doc else ""
-    out.append(f"**{first}**" if first else "_(no docstring)_")
-    out.append("")
-    meta = []
-    if t.get("markers"):
-        meta.append(" ".join(f"`{m}`" for m in t["markers"]))
-    if t.get("params"):
-        meta.append("params " + ", ".join(f"`{k}={v}`" for k, v in t["params"].items()))
-    meta.append(f"{info['duration']:.2f} s")
-    if t.get("file"):
-        meta.append(f"`{_rel(t['file'])}:{t.get('line')}`")
-    out.append(" · ".join(meta))
-    rest = "\n".join(doc.splitlines()[1:]).strip()
-    if rest:
-        out.append("")
-        out.append("<details><summary>Intent (full docstring)</summary>\n\n```text\n" + rest + "\n```\n</details>")
-    out.append("")
+# ---------------------------------------------------------------- one test
 
-    # ---- steps first (builds names), rendered later
-    steps, checks, stats = _steps(info, names)
-    info["n_checks"] = sum(c.get("n", 1) for c in checks)
-    info["n_sai"] = stats["sai"]
-
-    # ---- verdict
-    out.append("**Verdict:** " + _verdict(info, checks, stats))
-    rep = _failing_report(info)
-    if rep is not None and info["result"] not in ("Pass", "Skipped"):
-        where = rep.get("where") or {}
-        exc = rep.get("exc") or {}
-        if where:
-            out.append(f"- where: `{_rel(where.get('file'))}:{where.get('line')}`"
-                       + (f"  `{_short(where.get('src'), 120)}`" if where.get("src") else ""))
-        if exc.get("msg"):
-            msg_lines = [ln for ln in str(exc["msg"]).splitlines() if ln.strip()][:6]
-            out.append(f"- got: `{exc.get('type')}`")
-            out.append("  ```text")
-            out.extend("  " + _short(ln, 200) for ln in msg_lines)
-            out.append("  ```")
-        elif isinstance(rep.get("longrepr"), str):
-            out.append(f"- got: `{_first_line(rep['longrepr'])}`")
-        last_bad = stats.get("last_bad_sai")
-        if last_bad:
-            out.append(f"- last SAI call that did not succeed: `{last_bad}`")
-        miss = stats.get("pkt_miss")
-        if miss:
-            seen = "; ".join(f"`{_pkt(p)}`" for p in miss["recent"]) or "nothing"
-            out.append(f"- on {miss['where']} within {miss['timeout']} s, instead of the expected frame: {seen}")
-    xf = t.get("xfail") or {}
-    if info["result"] in ("Expected gap", "Gap now passes") and xf.get("reason"):
-        out.append(f"- profile gap: \"{xf['reason']}\" (strict={xf.get('strict')})")
-    if info["detail"] and info["result"] != "Interrupted":
-        out.append(f"- note: {info['detail']}")
-    out.append("")
-
-    # ---- checks
-    out.append("**Checks**")
-    out.append("")
-    if checks:
-        out.append("| # | Result | Where | Check | Values |")
-        out.append("|---|---|---|---|---|")
-        for i, c in enumerate(checks, 1):
-            out.append(f"| {i} | {c['result']} | {c['where']} | {c['check']} | {c['values']} |")
-    else:
-        out.append("_No assert or packet check ran._")
-    out.append("")
-
-    # ---- steps
-    out.append("**Steps**")
-    out.append("")
-    out.append("```text")
-    out.extend(steps or ["(no events)"])
-    out.append("```")
-    out.append("")
-
-    # ---- cleanup, surface, evidence
-    out.append("**Cleanup:** " + _cleanup_text(stats, names))
-    if stats["surface"]:
-        surf = []
-        for typ, ops in sorted(stats["surface"].items()):
-            op_text = ", ".join(f"{op}×{n}" for op, n in ops["ops"].items())
-            attrs = ", ".join(sorted(ops["attrs"]))
-            surf.append(f"{typ}: {op_text}" + (f" ({attrs})" if attrs else ""))
-        out.append("**SAI surface:** " + "; ".join(surf) + ".")
-    ev_lines = []
-    for p in stats["pcaps"]:
-        ev_lines.append(f"pcap `{_rel(p.get('path'))}` ({p.get('frames')} frames)")
-    for when in ("setup", "call", "teardown"):
-        r = info["reports"].get(when)
-        if r and r.get("stdout"):
-            ev_lines.append(f"{when} stdout: see below")
-    if ev_lines:
-        out.append("**Evidence:** " + "; ".join(ev_lines) + ".")
-    for when in ("setup", "call", "teardown"):
-        r = info["reports"].get(when)
-        if r and r.get("stdout"):
-            out.append("")
-            out.append(f"<details><summary>{when} stdout</summary>\n\n```text\n{r['stdout'].rstrip()}\n```\n</details>")
-    out.append("")
-    return "\n".join(out), info
-
-
-def _cleanup_text(stats, names):
-    """Objects created and removed by the test. A pre-existing object the test removed (for example
-    a default bridge port) is paired with a new object of the same type the test left in place."""
-    created, removed, types, shown = stats["created"], stats["removed"], stats["types"], stats["names"]
-    left = sorted(created - removed, key=lambda o: shown.get(o, o))
-    pre = sorted(removed - created, key=lambda o: shown.get(o, o))
-    replaced, gone = [], []
-    for old in pre:
-        new = next((o for o in left if types.get(o) == types.get(old)), None)
-        if new is None:
-            gone.append(shown.get(old, old))
+def _teardown_fixtures(events):
+    """Which fixture each teardown event belongs to: events since the previous fixture_done marker
+    belong to the fixture that just finished. Returns {seq: (name, scope)}."""
+    owner, buffer = {}, []
+    for e in events:
+        if e.get("phase") != "teardown":
+            continue
+        if e.get("k") == "fixture_done":
+            for b in buffer:
+                owner[b.get("seq")] = (e.get("name"), e.get("scope"))
+            buffer = []
         else:
-            left.remove(new)
-            replaced.append(f"{shown.get(old, old)} by {shown.get(new, new)}")
-    parts = [f"{len(created)} created" + (f", {len(removed & created)} of them removed" if created else "")]
-    if replaced:
-        parts.append("objects that existed before this test, removed and replaced by a new one of the same type: "
-                     + ", ".join(replaced))
-    if gone:
-        parts.append("objects that existed before this test, removed: " + ", ".join(gone))
-    parts.append(f"{len(left)} left behind" + (f" ({', '.join(shown.get(o, o) for o in left)})" if left else ""))
-    return "; ".join(parts) + "."
+            buffer.append(e)
+    return owner
 
 
-def _okey(ident):
-    """One spelling for an object: an OID, or an entry key as sorted compact JSON."""
-    if isinstance(ident, str) and ident.startswith("{"):
-        try:
-            ident = json.loads(ident)
-        except ValueError:
-            return ident
-    if isinstance(ident, dict):
-        return json.dumps(ident, sort_keys=True, separators=(",", ":"))
-    return str(ident)
+def _units(run, events):
+    """The test's steps in time order: top-level npu calls (with the SAI calls they made), SAI calls
+    made outside npu functions, asserts, packets sent and packet checks (with their polls)."""
+    owner = _teardown_fixtures(events)
+    children = collections.defaultdict(list)
+    units, checks, polls = [], [], []
+    session_teardown = 0
 
-
-def _obj_name(key, typ, names):
-    """Short name for the cleanup summary: alias or TYPE#n, or TYPE plus the key fields."""
-    if key.startswith("{"):
-        try:
-            fields = json.loads(key)
-        except ValueError:
-            return f"{typ} {key}"
-        body = " ".join(f"{k}={names.value(v)}" for k, v in fields.items() if k != "switch_id")
-        return f"{typ} {body}"
-    name = names.name(key)
-    return f"{typ} {name}" if name.startswith("oid:") else name
-
-
-def _verdict(info, checks, stats):
-    result = info["result"]
-    n_assert = sum(c["n"] for c in checks if c["kind"] == "assert" and c["ok"])
-    n_pkt = sum(1 for c in checks if c["kind"] == "pkt" and c["ok"])
-    caught = sum(1 for c in checks if c["kind"] == "pkt" and not c["ok"])
-    calls = f"{stats['sai']} SAI calls" + (f", {stats['bad']} not SUCCESS" if stats["bad"] else "")
-    if stats.get("reset_calls"):
-        calls += f" (plus {stats['reset_calls']} during a switch reset)"
-    if result == "Pass":
-        extra = f"; {caught} packet check(s) did not match and the test handled it" if caught else ""
-        return f"Pass. {n_assert} assert(s) and {n_pkt} packet check(s) passed{extra}; {calls}."
-    if result == "Interrupted":
-        return f"Interrupted: {info['detail']}; {calls} recorded before the stop."
-    if result == "Skipped":
-        rep = info["reports"].get("call") or info["reports"].get("setup") or {}
-        return f"Skipped: {_skip_reason(rep)}."
-    if result == "Expected gap":
-        return f"Expected gap: the test failed as the target profile expects; {calls}."
-    if result == "Gap now passes":
-        return "Gap now passes: the test passed although the profile lists it as an expected gap (strict xfail)."
-    if result == "Setup error":
-        return "Setup error: the test body did not run."
-    if result == "Cleanup error":
-        return f"Cleanup error: the test body passed, its teardown failed; {calls}."
-    return f"Fail. {calls}."
-
-
-def _steps(info, names):
-    """Readable step lines (grouped by phase), the checks list and per-test counters."""
-    t0 = _ts(info["test"]) if info["test"] else (_ts(info["own"][0]) if info["own"] else 0.0)
-    checks = []
-    stats = {"sai": 0, "bad": 0, "created": set(), "removed": set(), "surface": {}, "pcaps": [],
-             "last_bad_sai": None, "reset_calls": 0, "types": {}, "names": {}}
-    blocks = []                 # [header, [lines]] per phase; empty phases are dropped
-    events = info["own"]
-
-    # fold size probes: a BUFFER_OVERFLOW get followed by the same get
-    views = {e.get("seq"): sai_view(e) for e in events if e.get("k") == "sai"}
-    skip = _probes([(e.get("seq"), views[e.get("seq")]) for e in events if e.get("k") == "sai"])
-
-    failing = _failing_report(info)
-    fail_msg = _first_line(((failing or {}).get("exc") or {}).get("msg")) if failing else ""
-    state = {"phase": None, "fixture": None, "reset": False}
-    group = []                  # consecutive SAI calls with the same signature
-    reinit = []                 # calls after a switch reset (the switch's own re-init)
-    nothing = []                # consecutive "nothing on port" polls
-
-    def out(line):
-        blocks[-1][1].append(line)
-
-    def flush_group():
-        if reinit:
-            for line in _collapse(reinit, names):
-                out(line)
-            reinit.clear()
-        if len(group) <= 3:
-            for off, text, _ in group:
-                out(f"  {off} {text}")
-        else:
-            out(f"  {group[0][0]} {group[0][1]}")
-            out(f"  {'':9} … {len(group) - 2} more calls like this …")
-            out(f"  {group[-1][0]} {group[-1][1]}")
-        group.clear()
-
-    def flush_nothing():
-        if nothing:
-            ports = [str(p["port"]) for p in nothing if p["port"] != "any"]
-            where = []
-            if ports:
-                where.append(f"port(s) {','.join(ports)}")
-            if len(ports) < len(nothing):
-                where.append("any other port")
-            tmo = nothing[0].get("timeout")
-            out(f"  {nothing[0]['off']} nothing on {' and '.join(where)}"
-                + (f" ({tmo} s each)" if tmo is not None else "") + ", as expected")
-            nothing.clear()
-
-    def flush_all():
-        flush_group()
-        flush_nothing()
+    def unit(kind, ev, ts, **kw):
+        fx, scope = ev.get("fx"), ev.get("fxs")
+        if ev.get("phase") == "teardown" and ev.get("seq") in owner:
+            fx, scope = owner[ev.get("seq")]
+        return dict(k=kind, ev=ev, ts=ts, phase=ev.get("phase"), site=ev.get("site") or {}, fx=fx, scope=scope, **kw)
 
     for e in events:
         k = e.get("k")
-        if k in ("test", "report", "test_end", "fixture_done", "collected", "client"):
-            continue
-        if k == "aliases":
-            names.set_base(e.get("map"))
-            continue
-        phase = e.get("phase")
-        if phase != state["phase"]:
-            if blocks:
-                flush_all()
-            state.update(phase=phase, fixture=None, reset=False)
-            blocks.append([{"setup": "setup", "call": "test body", "teardown": "cleanup"}.get(phase, phase or "?"),
-                           []])
-        off = f"+{_ts(e) - t0:7.3f}s"
-        fx = e.get("fx")
-        if phase == "setup" and fx != state["fixture"]:
-            flush_all()
-            state["fixture"], state["reset"] = fx, False
-            if fx:
-                out(f"  [fixture {fx}]")
-        if k != "sai":
-            flush_group()
-        if k != "poll":
-            flush_nothing()
-
         if k == "sai":
-            if e.get("seq") in skip:
+            if e.get("seq") in run.in_block:
                 continue
-            v = views.get(e.get("seq")) or sai_view(e)
-            if v["op"] == "cleanup":
-                state["reset"] = True
-            text = sai_line(v, names, baseline=state["reset"])
-            if v.get("after_probe"):
-                text += "  (after a size probe)"
-            if state["reset"]:
-                stats["reset_calls"] += 1     # switch re-init after a reset: baseline, not the test's calls
-            elif v["op"] != "cleanup":
-                stats["sai"] += 1
-            if v["status"] not in (OK, None) and v["op"] != "cleanup":
-                stats["bad"] += 1
-                stats["last_bad_sai"] = text
-            if v["exc"]:
-                stats["last_bad_sai"] = text
-            typ = _view_type(v, names)
-            if v["op"] == "create" and v["status"] == OK and not state["reset"]:
-                oid = _okey(v["created"] or v["ident"])
-                stats["created"].add(oid)
-                stats["types"][oid] = typ
-                stats["names"][oid] = _obj_name(oid, typ, names)
-            if v["op"] == "remove" and v["status"] == OK and v["ident"]:
-                oid = _okey(v["ident"])
-                stats["removed"].add(oid)
-                stats["types"].setdefault(oid, typ)
-                # name now: a later alias update can point the same name at a replacement object
-                stats["names"].setdefault(oid, _obj_name(oid, typ, names))
-            if v["op"] != "cleanup" and not state["reset"]:
-                s = stats["surface"].setdefault(typ, {"ops": {}, "attrs": set()})
-                s["ops"][v["op"]] = s["ops"].get(v["op"], 0) + 1
-                if v["op"] in ("create", "set", "get"):
-                    s["attrs"].update(k2 for k2, _ in v["attrs"])
-            if state["reset"] and v["op"] != "cleanup":
-                reinit.append((off, v, text))
+            u = unit("sai", e, _ts(e))
+            if u["phase"] == "teardown" and u["scope"] in SESSION_SCOPES:
+                session_teardown += 1
                 continue
-            sig = _sig(v)
-            if group and group[-1][2] != sig:
-                flush_group()
-            group.append((off, "  " * int(e.get("depth") or 0) + text, sig))
-            if v["op"] == "cleanup":
-                flush_group()
-        elif k == "wire":
-            out(f"  {off} wire {e.get('fn')} {_short(e.get('op') or e.get('operation') or '')}"
-                f" -> {e.get('status') or (e.get('exc') or {}).get('type')}")
-        elif k == "assert":
-            file = Path(str(e.get("file") or "?")).name
-            where = f"`{file}:{e.get('line')}`"
-            check = f"`{_md_cell(_short(e.get('orig'), 100))}`"
-            if checks and checks[-1]["kind"] == "assert" and checks[-1]["where"] == where \
-                    and checks[-1]["check"] == check and checks[-1]["ok"]:
-                checks[-1]["n"] += 1
-                checks[-1]["result"] = f"PASS ×{checks[-1]['n']}"
-                continue
-            checks.append({"kind": "assert", "ok": True, "result": "PASS", "n": 1, "where": where,
-                           "check": check, "values": f"`{_md_cell(_first_line(e.get('expl'), 160))}`"})
-            out(f"  {off} CHECK PASS {file}:{e.get('line')}  {_short(e.get('orig'), 100)}")
+            r = run.root(e.get("npu"))
+            if r is None:
+                units.append(u)
+            else:
+                children[r].append(e)
+        elif k == "npu" and e.get("parent") is None:
+            units.append(unit("npu", e, _ts(e)))
+        elif k in ("assert", "send", "note"):
+            units.append(unit(k, e, _ts(e)))
         elif k == "pktcheck":
-            if e.get("ok"):
-                res = "PASS"
-            elif info["result"] == "Pass" or not (fail_msg and fail_msg in str(e.get("msg") or "")):
-                res = "not as expected (caught by the test)"
-            else:
-                res = "FAIL"
-            func = e.get("func") or "?"
-            if func.startswith("verify_no"):
-                desc = f"{func}: nothing on {_ports(e.get('ports'))}"
-            else:
-                desc = f"{func}: expect on {_ports(e.get('ports'))}"
-                if func == "verify_packets":
-                    desc += ", nothing elsewhere"
-            if e.get("count") is not None:
-                desc += f" (matched {e['count']})"
-            exp = e.get("exp")
-            checks.append({"kind": "pkt", "ok": bool(e.get("ok")), "result": res, "where": "ptf", "func": func,
-                           "check": _md_cell(desc), "values": _md_cell(_pkt(exp) if exp else "")})
-            if res == "FAIL":
-                stats["pkt_miss"] = stats.get("last_miss")
-            out(f"  {off} CHECK {res} {desc}" + (f"  [{_pkt(exp)}]" if exp else ""))
-            if not e.get("ok") and e.get("msg"):
-                for ln in str(e["msg"]).splitlines()[:40]:
-                    out("      " + ln)
-        elif k == "send":
-            out(f"  {off} SEND port {e.get('port')} {_pkt(e)}")
+            u = unit(k, e, _ts(e) - float(e.get("dur") or 0), polls=[])
+            units.append(u)
+            checks.append(u)
         elif k == "poll":
-            negative = str(e.get("within") or "").startswith("verify_no")
-            if e.get("ok"):
-                flush_nothing()
-                got = e.get("got") or {}
-                note = " (UNEXPECTED: a negative check)" if negative else \
-                    (" (matches expected)" if e.get("exp") else "")
-                out(f"  {off} RECV port {got.get('port')} {_pkt(got)}{note}")
-            elif negative or (e.get("exp") is None and e.get("port") is not None):
-                nothing.append({"port": e.get("port") if e.get("port") is not None else "any",
-                                "timeout": e.get("timeout"), "off": off})
+            polls.append(e)
+    top = [(u["ev"].get("seq"), sai_view(u["ev"])) for u in units if u["k"] == "sai"]
+    probes = _probes(top)
+    units = [u for u in units if not (u["k"] == "sai" and u["ev"].get("seq") in probes)]
+    out = []
+    for u in units:
+        if u["k"] == "npu":
+            sais = sorted(children.get(u["ev"].get("id"), []), key=lambda x: x.get("seq", 0))
+            u["sais"] = sais
+            if u["phase"] == "teardown" and u["scope"] in SESSION_SCOPES:
+                session_teardown += len(sais)
+                continue
+            if not sais and not u["ev"].get("exc") and u["ev"].get("id") not in run.block_roots:
+                continue        # no SAI call: a pure helper such as npu.fdb_entry_key
+        out.append(u)
+    for p in polls:
+        owner_check = next((c for c in checks if p.get("within") and c["ts"] - 0.001 <= _ts(p) <= _ts(c["ev"]) + 0.001),
+                           None)
+        if owner_check is not None:
+            owner_check["polls"].append(p)
+        else:
+            out.append(unit("poll", p, _ts(p)))
+    out.sort(key=lambda u: (u["ts"], u["ev"].get("seq", 0)))
+    # repeats of the same passing assert become one line
+    merged = []
+    for u in out:
+        prev = merged[-1] if merged else None
+        if prev and u["k"] == "assert" and prev["k"] == "assert" and \
+                (prev["ev"].get("file"), prev["ev"].get("line"), prev["ev"].get("orig")) == \
+                (u["ev"].get("file"), u["ev"].get("line"), u["ev"].get("orig")):
+            prev["n"] = prev.get("n", 1) + 1
+            continue
+        merged.append(u)
+    return merged, session_teardown
+
+
+class Ctx:
+    """What rendering a test collects: names, counts, checks and objects created or removed."""
+
+    def __init__(self, names, test_file):
+        self.names = names
+        self.test_file = test_file
+        self.sai = 0
+        self.checks = []
+        self.last_bad = None
+        self.created = {}         # okey -> {"name", "typ", "attrs"}
+        self.removed = {}         # okey -> {"name", "typ"}
+        self.last_sent = None
+        self.pkt_miss = None
+        self.fail_msg = ""
+        self.result = None
+        self.alias_events = []
+
+    def at(self, ts):
+        """Apply alias updates (switch re-init, recreated bridge ports) up to this time."""
+        while self.alias_events and _ts(self.alias_events[0]) <= ts:
+            self.names.set_base(self.alias_events.pop(0).get("map"))
+
+
+def _npu_args(ev, names):
+    args = dict(ev.get("args") or {})
+    args.pop("do_assert", None)
+    fn = ev.get("fn") or "?"
+    parts = []
+    for i, (k, v) in enumerate(args.items()):
+        if k == "args" and isinstance(v, list):          # signature not known: positional values
+            parts.extend(names.value(x) for x in v)
+            continue
+        if k in ("attrs", "attr") and v in ([], None):
+            continue
+        if isinstance(v, list) and v and isinstance(v[0], str) and "_ATTR_" in v[0]:
+            if fn in ("get", "get_stats", "clear_stats", "bulk_get"):
+                # names to read; the values next to them are placeholders
+                parts.append(", ".join(short_attr(x) for x in v if isinstance(x, str) and "_ATTR_" in x))
+            elif len(v) % 2 == 0:
+                parts.append(", ".join(f"{short_attr(a)}={names.value(x, a)}" for a, x in _pairs(v)))
             else:
-                flush_nothing()
-                where = f"port {e.get('port')}" if e.get("port") is not None else "any port"
-                out(f"  {off} nothing{' matching' if e.get('exp') else ''} on {where}"
-                    f" within {e.get('timeout')} s ({e.get('count', 0)} other frame(s) seen)")
-                stats["last_miss"] = {"where": where, "timeout": e.get("timeout"), "recent": e.get("recent") or []}
-                for p in e.get("recent") or []:
-                    out(f"      seen: {_pkt(p)}")
-                    if e.get("exp"):
-                        for ln in _hexdump(p.get("hex")):
-                            out(ln)
-        elif k == "pcap":
-            stats["pcaps"].append(e)
-            out(f"  {off} pcap written: {_rel(e.get('path'))} ({e.get('frames')} frames)")
-        elif k == "note":
-            out(f"  {off} note: {e.get('text')}")
-    if blocks:
-        flush_all()
-
-    # the failing check (pytest reports it; the pass hook only sees passing asserts)
-    rep = failing
-    if rep is not None and info["result"] in ("Fail", "Expected gap", "Setup error", "Cleanup error"):
-        exc = rep.get("exc") or {}
-        where = rep.get("where") or {}
-        if where:
-            src = _short(where.get("src") or "", 100)
-            file = Path(str(where.get("file") or "?")).name
-            etype = exc.get("type")
-            label = "FAIL" if etype in (None, "AssertionError") else f"ERROR ({etype})"
-            if info["result"] == "Expected gap":
-                label += " (expected gap)"
-            pkt = next((c for c in reversed(checks) if c["kind"] == "pkt" and c["result"] == "FAIL"), None)
-            if pkt is not None and pkt.get("func") and pkt["func"] in src:
-                # the failing packet check is the test line's failure: one row, with the test line
-                pkt["where"], pkt["result"] = f"`{file}:{where.get('line')}`", label
-                return _steps_lines(blocks), checks, stats
-            checks.append({"kind": "assert" if src.lstrip().startswith("assert") else "sai", "ok": False,
-                           "result": label, "where": f"`{file}:{where.get('line')}`",
-                           "check": f"`{_md_cell(src)}`" if src else "(SAI helper)",
-                           "values": f"`{_md_cell(_first_line(exc.get('msg'), 160))}`"})
-            line = f"  +{_ts(rep) - t0:7.3f}s CHECK {label} {file}:{where.get('line')}  {src}"
-            when = {"setup": "setup", "call": "test body", "teardown": "cleanup"}.get(rep.get("when"))
-            target = next((b for b in blocks if b[0] == when), None)
-            if target is None:
-                blocks.append([when or "?", []])
-                target = blocks[-1]
-            target[1].append(line)
-
-    return _steps_lines(blocks), checks, stats
+                parts.append(names.value(v))
+            continue
+        text = names.obj(v) if i == 0 else names.value(v)
+        parts.append(text if i < 3 or k in ("obj", "vlan_oid", "bp_oid", "mac") else f"{k}={text}")
+    return f"npu.{fn}(" + ", ".join(parts) + ")"
 
 
-def _steps_lines(blocks):
-    lines = []
-    for header, body in blocks:
-        if body:
-            lines.append(header)
-            lines.extend(body)
-    return lines
+def _sai_note(sais, fn):
+    ops = collections.Counter(e.get("op") for e in sais)
+    if len(sais) <= 1 or set(ops) == {fn}:
+        return ""
+    return "  (SAI: " + ", ".join(f"{n} {op}" for op, n in ops.items()) + ")"
 
 
-def _alias_type(names, ident):
-    name = names.base.get(ident) if isinstance(ident, str) else None
-    if not name:
+def _process_sais(sais, ctx):
+    """Count a call's SAI client calls, name what they created, note removes and failures.
+    Returns (first status that is not SUCCESS, the views)."""
+    views = [(e.get("seq"), sai_view(e)) for e in sais]
+    probes = _probes(views)
+    bad = None
+    for key, v in views:
+        ctx.sai += 1
+        if v["op"] == "cleanup":
+            continue
+        status = v["status"]
+        if key not in probes and status not in (OK, None) and bad is None:
+            bad = status
+        if v["op"] == "create" and status == OK:
+            ident = v["created"] or v["ident"]
+            name = ctx.names.created(v["typ"], v["created"]) if v["created"] else \
+                f"{v['typ']}{ctx.names.entry(ident) if ident else ''}"
+            ctx.created[_okey(ident)] = {"name": name, "typ": v["typ"], "attrs": v["attrs"]}
+        elif v["op"] == "remove" and status == OK and v["ident"]:
+            key2 = _okey(v["ident"])
+            typ = v["typ"] or ctx.names.types.get(v["ident"])
+            if key2 not in ctx.removed:
+                ident = v["ident"]
+                name = ctx.names.name(ident) if str(ident).startswith("oid:") else f"{typ}{ctx.names.entry(ident)}"
+                if name.startswith("oid:"):
+                    name = f"{typ} {name}"
+                ctx.removed[key2] = {"name": name, "typ": typ}
+    return bad, [v for _, v in views]
+
+
+def _npu_row(u, ctx, run):
+    ev = u["ev"]
+    names = ctx.names
+    left = _npu_args(ev, names)
+    bad, _ = _process_sais(u.get("sais") or [], ctx)
+    ret, exc = ev.get("ret"), ev.get("exc")
+    fn = ev.get("fn")
+    if exc:
+        right = f"-> raised {exc.get('type')}: {_first_line(exc.get('msg'), 100)}"
+    else:
+        status, value = None, ret
+        if isinstance(ret, list) and len(ret) == 2 and isinstance(ret[0], str) and ret[0].startswith("SAI_STATUS"):
+            status, value = ret
+        elif isinstance(ret, str) and ret.startswith("SAI_STATUS"):
+            status, value = ret, None
+        status = status if status not in (None, OK) else (bad or status)
+        if status and status != OK:
+            right = f"-> status {names.enum(status)}"
+        elif isinstance(value, str) and value.startswith("oid:"):
+            right = "-> " + names.name(value, first_use=True)
+        elif isinstance(value, dict) and "_saidata" in value:
+            pairs = _pairs(value["_saidata"])
+            right = "-> " + (names.value(pairs[0][1], pairs[0][0]) if len(pairs) == 1 else names.value(value))
+        elif isinstance(value, dict) or value in (None, "", []) or status == OK:
+            # a create of a keyed object (FDB entry, route) returns its key: nothing new to show
+            right = "-> ok"
+        else:
+            right = "-> " + names.value(value)
+    if ev.get("id") in run.block_roots:
+        right += "  (switch reset and initialised again: see switch init in SETUP)"
+    else:
+        right += _sai_note(u.get("sais") or [], fn)
+    if (bad and bad != OK) or exc:
+        ctx.last_bad = f"{left} {right}"
+    return left, right
+
+
+def _sai_row(u, ctx):
+    _, views = _process_sais([u["ev"]], ctx)
+    v = views[0]
+    if v["op"] == "cleanup":
+        return "SAI client cleanup (switch reset)", None
+    left = _sai_text(v, ctx.names)
+    if v["exc"]:
+        right = f"-> raised {v['exc'].get('type')}: {_first_line(v['exc'].get('msg'), 100)}"
+    elif v["status"] not in (OK, None):
+        right = f"-> status {ctx.names.enum(v['status'])}"
+    elif v["op"] == "create" and v["created"]:
+        right = "-> " + ctx.names.name(v["created"], first_use=True)
+    elif v["read"]:
+        right = "-> " + ", ".join(f"{short_attr(k)}={ctx.names.value(x, k)}" for k, x in v["read"])
+    else:
+        right = "-> ok" if v["status"] == OK else "-> (no status returned by the client)"
+    if v["status"] not in (OK, None) or v["exc"]:
+        ctx.last_bad = f"{left} {right}"
+    return left, right
+
+
+def _check_where(ev, ctx):
+    site = ev.get("site") or {}
+    if site.get("line"):
+        return f"{site.get('file') or ctx.test_file}:{site['line']}"
+    return "ptf"
+
+
+def _assert_row(u, ctx):
+    ev = u["ev"]
+    n = u.get("n", 1)
+    file = _base(ev.get("file"))
+    expl = _first_line(ev.get("expl"), 80)
+    res = "PASS" if n == 1 else f"PASS x{n}"
+    what = f"assert {_short(ev.get('orig'), 90)}"
+    ctx.checks.append({"res": res, "where": f"{file}:{ev.get('line')}", "what": what, "val": expl})
+    return what, f"{res}  {expl}"
+
+
+def _pkt_desc(ev):
+    func = ev.get("func") or "?"
+    ports = ev.get("ports")
+    if not ev.get("ok") and not func.startswith(("verify_no", "count_matched")):
+        return f"expected on {_ports(ports)}" + (", nothing elsewhere" if func == "verify_packets" else "")
+    if func.startswith("verify_no_other"):
+        return "nothing on any other port"
+    if func.startswith("verify_no"):
+        return f"nothing on {_port_word(ports)}" if ports is not None else "nothing on any port"
+    if func == "verify_packets":
+        return f"arrived on {_ports(ports)}, nothing elsewhere"
+    if func.startswith("count_matched"):
+        return f"matched {ev.get('count')}" if ev.get("count") is not None else "counted"
+    return f"arrived on {_ports(ports)}" if ports is not None else "arrived"
+
+
+def _pktcheck_rows(u, ctx, prefix, cont):
+    ev = u["ev"]
+    func = ev.get("func") or "?"
+    ports = ev.get("ports")
+    left = f"{func}({_port_word(ports)})" if ports is not None else f"{func}()"
+    if ev.get("ok"):
+        res = "PASS"
+    elif u.get("fail_label"):
+        res = u["fail_label"]
+    elif ctx.result == "Pass" or not (ctx.fail_msg and ctx.fail_msg in str(ev.get("msg") or "")):
+        res = "MISS (caught by the test)"
+    else:
+        res = "FAIL"
+    rows = [(prefix + left, f"{res}  {_pkt_desc(ev)}")]
+    exp = ev.get("exp")
+    if exp and (not ctx.last_sent or exp.get("hex") != ctx.last_sent.get("hex")):
+        rows.append((f"{cont}expected  {_pkt(exp)}", None))
+    if not ev.get("ok"):
+        for p in u.get("polls") or []:
+            if p.get("ok"):
+                if str(p.get("within") or "").startswith("verify_no"):
+                    got = p.get("got") or {}
+                    rows.append((f"{cont}got on port {got.get('port')}  {_pkt(got)}", None))
+                continue
+            where = f"port {p.get('port')}" if p.get("port") is not None else "any port"
+            if p.get("exp") is None:
+                continue
+            rows.append((f"{cont}nothing matching on {where} within {p.get('timeout')} s", None))
+            ctx.pkt_miss = {"where": where, "timeout": p.get("timeout"), "recent": p.get("recent") or []}
+            for seen in p.get("recent") or []:
+                rows.append((f"{cont}seen instead  {_pkt(seen)}", None))
+                if res.startswith(("FAIL", "ERROR")):
+                    rows.extend((f"{cont}  {h}", None) for h in _hexdump(seen.get("hex")))
+    where = _check_where(ev, ctx)
+    ctx.checks.append({"res": res, "where": where, "what": left, "val": "", "func": func, "kind": "pkt"})
+    return rows
+
+
+def _unit_rows(u, ctx, run, prefix, cont):
+    """Rows for one step. prefix starts the first line; cont is the indent of continuation lines."""
+    k = u["k"]
+    ctx.at(u["ts"])
+    if k == "npu":
+        left, right = _npu_row(u, ctx, run)
+        return [(prefix + left, right)]
+    if k == "sai":
+        left, right = _sai_row(u, ctx)
+        return [(prefix + left, right)]
+    if k == "assert":
+        left, right = _assert_row(u, ctx)
+        return [(prefix + left, right)]
+    if k == "send":
+        ev = u["ev"]
+        ctx.last_sent = ev
+        return [(f"{prefix}send_packet(port {ev.get('port')})", None), (f"{cont}frame     {_pkt(ev)}", None)]
+    if k == "pktcheck":
+        return _pktcheck_rows(u, ctx, prefix, cont)
+    if k == "poll":
+        ev = u["ev"]
+        if ev.get("ok"):
+            got = ev.get("got") or {}
+            return [(f"{prefix}poll", f"got on port {got.get('port')}  {_pkt(got)}")]
+        return [(f"{prefix}poll port {ev.get('port')}", f"nothing within {ev.get('timeout')} s")]
+    if k == "note":
+        return [(f"{prefix}note: {u['ev'].get('text')}", None)]
+    if k == "fail":
+        ctx.checks.append({"res": u["label"], "where": u["where"], "what": u["src"], "val": u["msg"]})
+        return [(prefix + u["src"], f"{u['label']}  {u['msg']}")]
+    return []
+
+
+def _helpers(u, skip=None):
+    """The lib helpers a step came from, without lambdas and comprehensions (wrappers, not functions
+    anyone calls by name) and without the fixture already named in the title."""
+    return [h for h in (u["site"].get("helpers") or [])
+            if not str(h.get("fn") or "").rsplit(".", 1)[-1].startswith("<")
+            and not (skip and _is_fixture_helper(h, skip))]
+
+
+def _helper_key(u, skip=None):
+    hs = _helpers(u, skip)
+    if not hs or u["k"] in ("send", "pktcheck", "poll", "fail"):
         return None
-    for prefix, typ in (("port[", "PORT"), ("bp[", "BRIDGE_PORT"), ("switch", "SWITCH"),
-                        ("default_vlan", "VLAN"), ("default_vrf", "VIRTUAL_ROUTER"), ("1q_bridge", "BRIDGE")):
-        if name.startswith(prefix):
-            return typ
+    h = hs[-1]
+    return (h.get("fid") or h.get("fn"), bool(h.get("exit")), h.get("fn"),
+            json.dumps(h.get("args"), sort_keys=True, default=str))
+
+
+def _is_fixture_helper(h, fixture):
+    fn = str(h.get("fn") or "")
+    return fn == fixture or fn.endswith("." + fixture)
+
+
+def _helper_title(u, ctx, skip=None):
+    h = _helpers(u, skip)[-1]
+    args = ", ".join(ctx.names.value(v) for k, v in (h.get("args") or []) if k != "do_assert")
+    return _short(f"{h.get('fn')}({args})", 110)
+
+
+def _shape(u, rows):
+    """Steps with the same shape (same function or SAI op, object type and attributes, and a good result)
+    can be folded when many come in a row; a step that did not succeed never is."""
+    if len(rows) != 1 or rows[0][1] is None or not rows[0][1].startswith("-> ") or \
+            rows[0][1].startswith(("-> status", "-> raised", "-> (no status")):
+        return None
+    ev = u["ev"]
+    if u["k"] == "npu":
+        return ("npu", ev.get("fn"), tuple((ev.get("args") or {}).keys()))
+    if u["k"] == "sai":
+        v = sai_view(ev)
+        return ("sai", v["op"], v["typ"], tuple(k for k, _ in v["attrs"]))
     return None
 
 
-def _md_cell(text):
-    return str(text).replace("|", "\\|").replace("\n", " ")
+def _steps_rows(units, render, pad, fold=5):
+    """Rows for consecutive steps; a run of `fold` or more steps of the same shape keeps the first two and
+    the last, with a count in between (every call is still in the .rec)."""
+    done = [(u, render(u)) for u in units]          # render all: names and counts need every step
+    out, i = [], 0
+    while i < len(done):
+        shape = _shape(*done[i])
+        j = i + 1
+        while shape is not None and j < len(done) and _shape(*done[j]) == shape:
+            j += 1
+        if shape is not None and j - i >= fold:
+            out += done[i][1] + done[i + 1][1]
+            out.append((" " * pad + f"… {j - i - 3} more like this (same call, other objects; all in the .rec) …", None))
+            out += done[j - 1][1]
+        else:
+            for _, rows in done[i:j]:
+                out += rows
+        i = j
+    return out
 
 
-# ---------------------------------------------------------------- whole run
-
-def _group_session(events, aliases):
-    """Session-level SAI calls (switch init, final teardown): size probes folded, runs of
-    successful gets grouped. Returns (lines, number of size probes)."""
-    names = Names(aliases)
-    calls = [e for e in events if e.get("k") == "sai"]
-    views = {e.get("seq"): sai_view(e) for e in calls}
-    skip = _probes([(e.get("seq"), views[e.get("seq")]) for e in calls])
-    t0 = _ts(events[0]) if events else 0.0
-    items = []
-    for e in events:
-        if e.get("k") == "aliases":
-            names.set_base(e.get("map"))
+def _group_rows(units, ctx, run, clock=True, undo=False, indent="  ", skip=None):
+    """Rows for a list of steps, grouped under the lib helper that made them (consecutive steps of
+    the same helper call). Entering helpers get a title line; exiting ones a 'name exit' column."""
+    rows = []
+    stamp = (lambda u: _clock(u["ts"]) + "  ") if clock else (lambda u: "")
+    blank = " " * (14 if clock else 0)
+    groups = [(key, list(g)) for key, g in itertools.groupby(units, key=lambda u: _helper_key(u, skip))]
+    title_w = max((len(f"{key[2]} exit") for key, _ in groups if key), default=0) if undo else 0
+    for key, g in groups:
+        if key is None:
+            rows.extend(_steps_rows(g, lambda u: _unit_rows(u, ctx, run, indent + stamp(u), indent + blank + "  "),
+                                    len(indent + blank) + (2 if clock else 0)))
             continue
-        if e.get("k") != "sai" or e.get("seq") in skip:
+        if undo:
+            title = f"{key[2]} exit".ljust(title_w)
+            for i, u in enumerate(g):
+                first = indent + stamp(u) + title + "  " if i == 0 else indent + blank + " " * (title_w + 2)
+                rows.extend(_unit_rows(u, ctx, run, first, indent + blank + " " * (title_w + 4)))
             continue
-        v = views[e.get("seq")]
-        items.append((f"+{_ts(e) - t0:7.3f}s", v, sai_line(v, names)))
-    return _collapse(items, names), len(skip)
+        ctx.at(g[0]["ts"])
+        rows.append((indent + stamp(g[0]) + _helper_title(g[0], ctx, skip), None))
+        rows.extend(_steps_rows(g, lambda u: _unit_rows(u, ctx, run, indent + blank + "  ", indent + blank + "    "),
+                                len(indent + blank) + 2))
+    return rows
 
 
-def render_markdown(events):
-    session = next((e for e in events if e.get("k") == "session"), {}) or {}
-    clients = [e for e in events if e.get("k") == "client"]
-    collected = next((e.get("n") for e in events if e.get("k") == "collected"), None)
-    run_end = next((e for e in events if e.get("k") == "run_end"), None)
+def _mode(u):
+    if u["k"] == "fail":
+        return "body"
+    hs = u["site"].get("helpers") or []
+    if any(h.get("exit") for h in hs):
+        return "undo"
+    if any(h.get("gen") for h in hs):
+        return "configure"
+    return "body"
 
-    # bucket events per test; aliases are global state in seq order
-    tests, order = {}, []
-    aliases = {}
-    alias_at_start = {}
-    first_aliases = None
-    session_events = []
-    for e in events:
-        if e.get("k") == "aliases":
-            aliases = merge_aliases(aliases, e.get("map"))
-        elif first_aliases is None and aliases and e.get("phase") == "call":
-            first_aliases = dict(aliases)   # the baseline once switch init is done
-        nodeid = e.get("test")
-        if nodeid:
-            if nodeid not in tests:
-                tests[nodeid] = []
-                order.append(nodeid)
-                alias_at_start[nodeid] = dict(aliases)
-            tests[nodeid].append(e)
-        elif e.get("k") in ("sai", "aliases", "note", "wire"):
-            session_events.append(e)
 
-    infos = []
-    for nodeid in order:
-        info = analyse_test(tests[nodeid], alias_at_start[nodeid])
-        session_events.extend(info["session"])
-        infos.append((nodeid, info))
-    session_events.sort(key=lambda e: e.get("seq", 0))
+def _src(text):
+    text = str(text or "").strip().rstrip("\\").rstrip()
+    more = text.endswith(",")
+    text = text.rstrip(":").rstrip(",").rstrip()
+    return _short(text + (", ..." if more else ""), 90)
 
+
+def _section_title(mode, units):
+    lines = sorted({u["site"].get("line") for u in units if u["site"].get("line")})
+    src = next((u["site"].get("src") for u in units if u["site"].get("line") == (lines[0] if lines else None)), "")
+    # Python 3.13 reports each item of a multi-line with statement on its own line (3.12: the with line)
+    where = f"line {lines[0]}" if len(lines) == 1 else (f"lines {lines[0]}-{lines[-1]}" if lines else "")
+    is_with = str(src).startswith("with ")
+    if mode == "undo":
+        if is_with:
+            return f"Undo (leaving the with block on {where})"
+        return "Undo" + (f" ({where})" if where else "")
+    if mode == "configure" and is_with and len(lines) > 1:
+        return f"Configure ({where}: {_src(src)})"
+    if mode == "configure":
+        word = "Configure"
+    elif any(u["k"] in ("send", "pktcheck", "poll") for u in units):
+        word = "Send and check"
+    elif any(u["k"] in ("npu", "sai") for u in units):
+        word = "Test steps"
+    else:
+        word = "Check"
+    if len(lines) == 1:
+        return f"{word} (line {lines[0]}: {_src(src)})"
+    return word + (f" (lines {lines[0]}-{lines[-1]})" if lines else "")
+
+
+def _body_lines(units, ctx, run):
+    if not units:
+        return ["  (nothing recorded)"]
     out = []
-    run = session.get("run") or "?"
-    out.append(f"# Test log: {run}")
-    out.append("")
-    out.append("_Draft for internal review. Generated automatically from the run's events "
-               f"(`{run}.events.jsonl`); every line below was captured during the run._")
-    out.append("")
-    hdr = [
-        ("Target profile", session.get("profile")),
-        ("Testbed", session.get("testbed")),
-        ("Traffic", "on" if session.get("traffic") else "off"),
-        ("MLD filter", "on" if session.get("mld") else "off"),
-        ("Expected gaps in profile", session.get("gaps")),
-        ("SAI client", ", ".join(sorted({str(c.get('cls')) for c in clients})) or "-"),
-        ("Git commit (tests/poc)", session.get("commit") or "unknown"),
-        ("Started", session.get("start")),
-        ("Python / pytest / pytest-html", (f"{session.get('python')} / {session.get('pytest')} / "
-                                           f"{session.get('pytest_html')}")),
-        ("ptf / scapy", f"{session.get('ptf')} / {session.get('scapy')}"),
-        ("saichallenger package", session.get("saichallenger")),
-        ("Tests collected", collected),
-    ]
-    out.append("| | |")
-    out.append("|---|---|")
-    out.extend(f"| {k} | {_md_cell(v)} |" for k, v in hdr if v not in (None, ""))
-    out.append("")
-
-    counts = {}
-    for _, info in infos:
-        counts[info["result"]] = counts.get(info["result"], 0) + 1
-    out.append("**Results:** " + ", ".join(f"{r} {counts[r]}" for r in RESULT_ORDER if r in counts)
-               + (f" (pytest exit status {run_end.get('exitstatus')})" if run_end else " (run did not finish)"))
-    out.append("")
-    out.append("| # | Test | Result | Why | SAI calls | Checks | Time |")
-    out.append("|---|---|---|---|---|---|---|")
-    sections = []
-    for i, (nodeid, info) in enumerate(infos, 1):
-        text, _ = _render_info(info, number=i, anchor=f"t{i}")
-        sections.append(text)
-        why = _why(info)
-        n_sai, n_chk = info.get("n_sai", 0), info.get("n_checks", 0)
-        out.append(f"| {i} | [{info['test'].get('name') or nodeid}](#t{i}) | {info['result']} | {_md_cell(why)} | "
-                   f"{n_sai} | {n_chk} | {info['duration']:.2f} s |")
-    out.append("")
-
-    out.append("## Session start and end")
-    out.append("")
-    base = first_aliases or aliases or {}
-    if base:
-        ports = sorted((v, k) for k, v in base.items() if v.startswith("port["))
-        bps = sorted((v, k) for k, v in base.items() if v.startswith("bp["))
-        others = sorted((v, k) for k, v in base.items() if not v.startswith(("port[", "bp[")))
-        out.append(f"Baseline after switch init: {len(ports)} ports, {len(bps)} bridge ports; "
-                   + ", ".join(f"{v} = `{k}`" for v, k in others) + ".")
-        out.append("")
-        out.append("<details><summary>Port and bridge-port names used below</summary>\n\n```text")
-        for (pv, pk), (bv, bk) in zip(sorted(ports, key=lambda x: _idx(x[0])), sorted(bps, key=lambda x: _idx(x[0]))):
-            out.append(f"{pv:9} {pk:24} {bv:7} {bk}")
-        out.append("```\n</details>")
-        out.append("")
-    sess_lines, n_probe = _group_session(session_events, base)
-    n_sess = sum(1 for e in session_events if e.get("k") == "sai")
-    out.append(f"{n_sess} SAI calls outside the tests (switch init, resets by session fixtures, final teardown)"
-               + (f", including {n_probe} size probes (a get answered {PROBE} with the list length, "
-                  "then repeated with room for the list; shown once)" if n_probe else "")
-               + ". Runs of successful gets are grouped with a count per attribute; creates, sets, removes "
-               "and every call that did not succeed are listed one by one.")
-    out.append("")
-    out.append("<details><summary>Session SAI calls</summary>\n\n```text")
-    out.extend(sess_lines or ["(none recorded)"])
-    out.append("```\n</details>")
-    out.append("")
-    out.append("## Tests")
-    out.append("")
-    out.extend(sections)
-    return "\n".join(out) + "\n"
+    sections = [(m, list(g)) for m, g in itertools.groupby(units, key=_mode)]
+    for i, (mode, sec) in enumerate(sections):
+        if i:
+            out.append("")
+        out.append(_section_title(mode, sec))
+        out.extend(_align(_group_rows(sec, ctx, run, clock=True, undo=(mode == "undo"))))
+    return out
 
 
-def _idx(name):
-    m = re.search(r"\[(\d+)\]", name)
-    return int(m.group(1)) if m else 0
+def _fixture_lines(units, ctx, run):
+    """SETUP or CLEANUP work of function fixtures, grouped by fixture (no timestamps)."""
+    out = []
+    for fx, g in itertools.groupby(units, key=lambda u: u["fx"] or "(no fixture)"):
+        g = list(g)
+        rows = [(f"  fixture {fx}", None)]
+        rows.extend(_group_rows(g, ctx, run, clock=False, undo=False, indent="    ", skip=fx))
+        out.extend(_align(rows))
+    return out
+
+
+def _init_lines(block, run, this_test):
+    """The switch init a test ran on (option B: in full, in every file), grouped by op and type."""
+    if block is None:
+        return ["  switch init      not recorded in this run's events"]
+    where_test = block.get("test")
+    info = run.tests.get(where_test) or {}
+    phase = {"setup": "setup", "call": "test body", "teardown": "cleanup"}.get(block.get("phase"), block.get("phase"))
+    if where_test == this_test:
+        where = f"in this test's {phase}"
+    elif where_test:
+        where = f"in the {phase} of test {info.get('index')}, {(info.get('ev') or {}).get('name') or where_test}"
+    else:
+        where = "before the first test"
+    first = block is run.blocks[0]
+    why = ""
+    if not first:
+        if block.get("fx") == "on_prev_test_failure":
+            why = ", after the previous test failed"
+        elif block.get("root") is not None:
+            why = ", by npu.reset()"
+    head = f"once for the run, at {_clock(block['ts'])}, {where}:" if first else \
+        f"redone at {_clock(block['ts'])}, {where}{why}:"
+    lines = [f"  {'switch init':<{LABEL_W}}{head}"]
+    key = (block["seq"], len(block["events"]))
+    if key not in run.cache["init"]:
+        run.cache["init"][key] = _init_rows(block, run)
+    return lines + run.cache["init"][key]
+
+
+def _init_rows(block, run):
+    names = Names(block.get("aliases"), dict(run.enums))
+    names.types.update(run.types)
+    views = [(e.get("seq"), sai_view(e)) for e in block["events"]]
+    probes = _probes(views)
+    groups, order = {}, []
+    gets, bad = [], []
+    for key, v in views:
+        if key in probes:
+            continue
+        if v["status"] not in (OK, None) and v["op"] != "cleanup":
+            bad.append(v)
+            continue
+        if v["op"] == "get":
+            if "get" not in groups:
+                groups["get"] = gets
+                order.append("get")
+            gets.append(v)
+            continue
+        typ = v["typ"] or (names.types.get(v["ident"]) if isinstance(v["ident"], str) else None)
+        g = (v["op"], None if v["op"] in ("flush_fdb_entries", "cleanup") else (typ or "(type not sent)"))
+        if g not in groups:
+            groups[g] = []
+            order.append(g)
+        groups[g].append(v)
+    rows = []
+    labels = [f"{op} {typ}" if typ else op for op, typ in (g for g in order if g != "get")]
+    label_w = min(max([15] + [len(x) for x in labels]), 24)
+    for g in order:
+        if g == "get":
+            per = collections.OrderedDict()
+            for v in gets:
+                typ = v["typ"] or names.types.get(v["ident"]) or "?"
+                per.setdefault(typ, collections.Counter()).update(short_attr(k) for k, _ in v["attrs"])
+            label = f"{len(gets)} gets"
+            label_w2 = max(len(t) for t in per) + 2 if per else 2
+            first_row = True
+            for typ, counter in per.items():
+                words = [a if n == 1 else f"{a} x{n}" for a, n in counter.items()]
+                words = [w + "," for w in words[:-1]] + words[-1:]
+                pre = f"    {(label if first_row else ''):<{label_w}}  {typ:<{label_w2}}"
+                rest = " " * len(pre)
+                rows.extend(_wrap(words, 104, pre, rest))
+                first_row = False
+            if probes:
+                rows.append(f"    {'size probes':<{label_w}}  {len(probes)} (a list get answered BUFFER_OVERFLOW with the "
+                            "size, then repeated)")
+            continue
+        op, typ = g
+        vs = groups[g]
+        if op == "cleanup":
+            rows.append(f"    {'reset':<{label_w}}  SAI client cleanup, target state flushed")
+            continue
+        for v in vs:
+            if v["op"] == "create" and v["created"]:
+                names.types[v["created"]] = v["typ"]
+        label = f"{op} {typ}" if typ else op
+        if typ == "(type not sent)":
+            src = {run.seen.get(v["ident"]) for v in vs}
+            if len(src) == 1 and None not in src:
+                label = f"{op} ?"
+                typ_note = f"(type not sent; these OIDs were read from {src.pop()})"
+            else:
+                typ_note = None
+        else:
+            typ_note = None
+        if len(vs) == 1:
+            v = vs[0]
+            words = [f"{short_attr(k)}={names.value(x, k)}" for k, x in v["attrs"]]
+            if op != "create" and v["ident"]:
+                words.insert(0, names.obj(v["ident"]))
+            if op == "create" and v["created"]:
+                words.append(f"-> {v['created']}")
+        else:
+            words = [f"x{len(vs)},"]
+            keys = []
+            for v in vs:
+                for k, _ in v["attrs"]:
+                    if k not in keys:
+                        keys.append(k)
+            for k in keys:
+                vals = [names.value(dict(v["attrs"]).get(k), k) for v in vs if k in dict(v["attrs"])]
+                if len(set(vals)) == 1:
+                    words.append(f"{short_attr(k)}={vals[0]},")
+                else:
+                    words.append(f"{short_attr(k)}={vals[0]}..{vals[-1]},")
+            words[-1] = words[-1].rstrip(",")
+        if typ_note:
+            words.append(typ_note)
+        pre = f"    {label:<{label_w}}  "
+        rows.extend(_wrap(words, 104, pre, " " * len(pre)))
+    for v in bad:
+        rows.append(f"    {'not SUCCESS':<{label_w}}  {_sai_text(v, names)} -> status {names.enum(v['status'])}")
+    return rows
+
+
+def _testbed_lines(run, nodeid):
+    h, tb = run.header, run.testbed
+    aliases, dvid = run.alias_body.get(nodeid, ({}, None))
+    by_name = {v: k for k, v in aliases.items()}
+    rows = []
+
+    def row(label, value):
+        if value not in (None, ""):
+            rows.append(f"  {label:<{LABEL_W}}{value}")
+
+    profile = h.get("profile")
+    row("profile", f"{profile}  (tests/poc/targets/{profile}.json)" if profile else "(none)")
+    testbed = tb.get("name") or h.get("testbed")
+    row("testbed file", f"testbeds/{testbed}.json" if testbed else None)
+    if tb.get("target") or tb.get("asic"):
+        row("SAI target", f"{tb.get('target')}  (asic={tb.get('asic')}"
+                          + (f", sku={tb.get('sku')}" if tb.get("sku") else "") + ")")
+    client = tb.get("client") or (run.clients[0] if run.clients else None)
+    if client:
+        path = CLIENT_PATH.get(client)
+        row("SAI client", f"{client} -> {path}" if path else f"{client} ({tb.get('client_type') or '?'} client)")
+    traffic = tb.get("run_traffic")
+    if traffic is None:
+        traffic = h.get("traffic")
+    if traffic:
+        row("traffic mode", "True  (packets are really sent with PTF)")
+    elif h.get("traffic"):
+        row("traffic mode", "False  (control plane only: this target does not forward; traffic tests skip)")
+    else:
+        row("traffic mode", "False  (control plane only: run without --traffic; traffic tests skip)")
+    row("switch oid", by_name.get("switch"))
+    ports = sorted(((int(re.search(r"\d+", n).group()), o) for n, o in by_name.items() if n.startswith("port[")))
+    if ports:
+        shown = ", ".join(f"[{i}]={o}" for i, o in ports[:3])
+        row("switch ports", f"{len(ports)}  {shown}" + (" ..." if len(ports) > 3 else ""))
+    if by_name.get("default_vlan"):
+        row("default VLAN", f"id={dvid or '?'}  {by_name['default_vlan']}")
+    if h.get("ports") is not None:
+        row("profile ports", str(h.get("ports")))
+    mld = f"MLD filter {'on' if h.get('mld') else 'off'}"
+    if h.get("filters") is not None:
+        row("traffic filters", f"{h['filters']}  ({mld})")
+    elif h.get("mld") is not None:
+        row("traffic filters", mld)
+    dp = tb.get("dataplane")
+    if dp:
+        dports = dp.get("ports") or []
+        shown = ", ".join(f"{a}={n}" for a, n in dports[:4])
+        row("dataplane", f"{dp.get('type')} ({dp.get('mode')}), {len(dports)} ports: {shown}"
+                         + (" ..." if len(dports) > 4 else ""))
+    return rows
+
+
+def _objects_lines(ctx):
+    """CLEANUP summary: objects the test created and removed, objects that existed before and were
+    removed and re-created, and anything left behind."""
+    created, removed = ctx.created, ctx.removed
+    gone = [k for k in created if k in removed]
+    left = [k for k in created if k not in removed]
+    pre = [k for k in removed if k not in created]
+    restored, removed_only = [], []
+    for k in pre:
+        typ = removed[k]["typ"]
+        new = next((x for x in left if created[x]["typ"] == typ), None)
+        if new is None:
+            removed_only.append(removed[k]["name"])
+        else:
+            left.remove(new)
+            restored.append(new)
+    rows = []
+
+    def row(label, n, items):
+        rows.append(f"  {label:<21}{n:<4}{items}".rstrip())
+
+    row("created and removed", len(gone), _compact([created[k]["name"] for k in gone], [created[k]["typ"] for k in gone]))
+    if restored:
+        descr = [_describe(created[k], ctx.names) for k in restored]
+        row("restored", len(restored), ", ".join(descr))
+        rows.append(f"  {'':<25}(existed before the test; removed and re-created, so the OIDs are new)")
+    if removed_only:
+        row("removed, existed", len(removed_only), ", ".join(removed_only))
+    row("left behind", len(left), _compact([created[k]["name"] for k in left], [created[k]["typ"] for k in left]))
+    return rows
+
+
+def _compact(names, types):
+    """VLAN#1, VLAN_MEMBER#1-#3, FDB_ENTRY x3."""
+    by_type = collections.OrderedDict()
+    for n, t in zip(names, types):
+        by_type.setdefault(t, []).append(n)
+    parts = []
+    for t, ns in by_type.items():
+        nums = []
+        for n in ns:
+            m = re.fullmatch(rf"{re.escape(str(t))}#(\d+)", str(n))
+            nums.append(int(m.group(1)) if m else None)
+        if all(x is not None for x in nums) and nums:
+            nums.sort()
+            if len(nums) > 2 and nums == list(range(nums[0], nums[-1] + 1)):
+                parts.append(f"{t}#{nums[0]}-#{nums[-1]}")
+            else:
+                parts.extend(f"{t}#{x}" for x in nums)
+        elif len(ns) > 2:
+            parts.append(f"{t} x{len(ns)}")
+        else:
+            parts.extend(ns)
+    return ", ".join(parts)
+
+
+def _describe(obj, names):
+    """A re-created object by the objects it points to: VLAN_MEMBER(default_vlan, bp[2])."""
+    refs = [names.value(v, k) for k, v in obj["attrs"] if isinstance(v, str) and v.startswith("oid:")]
+    return f"{obj['typ']}(" + ", ".join(refs) + ")" if refs else obj["name"]
+
+
+def _why_lines(info, ctx):
+    res = info["result"]
+    if res == "Pass":
+        return []
+    t = info["test"]
+    rows = []
+    xf = t.get("xfail") or {}
+    if res in ("Expected gap", "Gap now passes") and xf.get("reason"):
+        rows.append(("profile says", f"{xf['reason']}" + (" (strict)" if xf.get("strict") else "")))
+    if res == "Gap now passes":
+        rows.append(("note", "the test passed although the profile lists it as an expected gap (strict xfail)"))
+    if res == "Skipped":
+        rep = info["reports"].get("call") or info["reports"].get("setup") or {}
+        rows.append(("reason", _skip_reason(rep)))
+    if res == "Interrupted":
+        rows.append(("note", info["detail"]))
+    rep = _failing_report(info["reports"])
+    if rep is not None and res not in ("Pass", "Skipped"):
+        where = rep.get("where") or {}
+        exc = rep.get("exc") or {}
+        if where:
+            rows.append(("where", f"{_base(where.get('file'))}:{where.get('line')}  {_short(where.get('src'), 90)}"))
+        msg = [ln for ln in str(exc.get("msg") or "").splitlines() if ln.strip()][:4]
+        if msg:
+            rows.append(("got", f"{exc.get('type')}: {_short(msg[0], 120)}"))
+            rows.extend(("", _short(ln, 120)) for ln in msg[1:])
+        elif isinstance(rep.get("longrepr"), str):
+            rows.append(("got", _first_line(rep["longrepr"], 120)))
+    if ctx.last_bad and res not in ("Pass", "Skipped", "Gap now passes"):
+        rows.append(("last failed call", _short(ctx.last_bad, 150)))
+    miss = ctx.pkt_miss
+    if miss and res in ("Fail", "Expected gap"):
+        seen = "; ".join(_pkt(p) for p in miss["recent"]) or "nothing"
+        rows.append(("on " + miss["where"], f"within {miss['timeout']} s, instead of the expected frame: {seen}"))
+    if info["detail"] and res != "Interrupted":
+        rows.append(("note", info["detail"]))
+    return [WHY_TITLE.get(res, res.upper())] + [f"  {label:<{LABEL_W}}{text}" for label, text in rows]
+
+
+def _checks_lines(ctx):
+    if not ctx.checks:
+        return ["  (no assert or packet check ran)"]
+    rw = max(len(c["res"]) for c in ctx.checks)
+    ww = max(len(c["where"]) for c in ctx.checks)
+    rows = [(f"  {c['res']:<{rw}}  {c['where']:<{ww}}  {c['what']}", c["val"] or None) for c in ctx.checks]
+    return _align(rows, cap=100)
+
+
+def _fail_unit(info, units, test_file):
+    """The failing check from pytest's report (the pass hook sees only passing asserts), placed after
+    the last step before the undo that followed it. None when a packet check already shows it."""
+    rep = _failing_report(info["reports"])
+    if rep is None or info["result"] not in ("Fail", "Expected gap", "Setup error", "Cleanup error"):
+        return None
+    exc = rep.get("exc") or {}
+    where = rep.get("where") or {}
+    if not where:
+        return None
+    src = _short(where.get("src") or "", 90)
+    file = _base(where.get("file"))
+    etype = exc.get("type")
+    label = "FAIL" if etype in (None, "AssertionError") else f"ERROR ({etype})"
+    if info["result"] == "Expected gap":
+        label += " (expected gap)"
+    msg = _first_line(exc.get("msg"), 100)
+    phase = rep.get("when")
+    for u in reversed(units):
+        if u["k"] == "pktcheck" and u["phase"] == phase and not u["ev"].get("ok") \
+                and (u["ev"].get("func") or "?") in src:
+            u["fail_label"] = label          # the failing packet check is this line's failure: one row
+            return None
+    fail = {"k": "fail", "ev": rep, "ts": _ts(rep), "phase": phase, "site": {}, "fx": None, "scope": None,
+            "label": label, "where": f"{file}:{where.get('line')}", "src": src, "msg": msg}
+    if file != test_file:
+        # inside a lib helper: the step that raised already shows it; the check goes in CHECKS only
+        fail["row"] = False
+        return fail
+    # on the test line, after the steps before it (and before any undo or finally that ran after it)
+    same = [u for u in units if u["phase"] == phase and _mode(u) != "undo"]
+    before = [u for u in same if (u["site"].get("line") or 0) <= (where.get("line") or 0)] or same
+    fail["ts"] = (before[-1]["ts"] + 1e-6) if before else _ts(rep)
+    fail["site"] = {"line": where.get("line"), "src": where.get("src"), "file": file}
+    return fail
+
+
+def _test_info(run, nodeid, finished):
+    events = run.by_test.get(nodeid) or []
+    t = run.tests.get(nodeid, {}).get("ev") or {}
+    reports = {e.get("when"): e for e in events if e.get("k") == "report"}
+    result, detail = outcome(t, reports)
+    if not finished and not any(e.get("k") == "test_end" for e in events):
+        # the run stopped inside this test (Ctrl-C ends pytest at once: the PTF dataplane restores
+        # the default SIGINT action), so the result pytest would have given is unknown
+        done = [f"{w} {reports[w].get('outcome')}" for w in ("setup", "call", "teardown") if w in reports]
+        result = "Interrupted"
+        detail = "the run stopped before this test finished" + (f" (done: {', '.join(done)})" if done else "")
+    duration = sum(float(r.get("dur") or 0) for r in reports.values())
+    return {"test": t, "reports": reports, "result": result, "detail": detail, "duration": duration,
+            "events": events}
+
+
+def render_one(run, nodeid, finished=False):
+    """The plain-text log of one test. Returns (text, info)."""
+    info = _test_info(run, nodeid, finished)
+    t = info["test"]
+    events = info["events"]
+    names = Names(run.alias_start.get(nodeid), dict(run.enums))
+    names.types.update(run.types)
+    names.learn_switch_values(run.seen)
+    ctx = Ctx(names, _base(t.get("file")))
+    ctx.result = info["result"]
+    failing = _failing_report(info["reports"])
+    ctx.fail_msg = _first_line(((failing or {}).get("exc") or {}).get("msg")) if failing else ""
+    units, session_teardown = _units(run, events)
+    ctx.alias_events = sorted((e for e in events if e.get("k") == "aliases"), key=_ts)
+    fail = _fail_unit(info, units, ctx.test_file)
+
+    def phase_units(phase):
+        return [u for u in units if u["phase"] == phase]
+
+    # SETUP
+    setup = ["SETUP"]
+    setup.extend(_init_lines(run.block_for(nodeid), run, nodeid))
+    pcap_start = next((e for e in events if e.get("k") == "pcap_start"), None)
+    if pcap_start:
+        setup.append(f"  {'pcap capture':<{LABEL_W}}sniffer started on {', '.join(pcap_start.get('ifaces') or [])}")
+    su = phase_units("setup")
+    if su:
+        setup.extend(_fixture_lines(su, ctx, run))
+    if fail and fail["phase"] == "setup" and fail.get("row", True):
+        setup.extend(_align(_unit_rows(fail, ctx, run, "  ", "    ")))
+    rep = info["reports"].get("setup")
+    setup.append(f"  setup: {(rep or {}).get('outcome', 'not reported').upper()}"
+                 + (f"  ({_skip_reason(rep)})" if rep and rep.get("outcome") == "skipped" else ""))
+
+    # TEST BODY
+    body_units = phase_units("call")
+    if fail and fail["phase"] == "call" and fail.get("row", True):
+        body_units = sorted(body_units + [fail], key=lambda u: u["ts"])
+    call = info["reports"].get("call") or {}
+    if not body_units and call.get("outcome") == "skipped":
+        body = ["TEST BODY", "", f"  (skipped: {_skip_reason(call)})"]
+    elif "call" in info["reports"] or body_units:
+        body = ["TEST BODY", ""] + _body_lines(body_units, ctx, run)
+    else:
+        body = ["TEST BODY", "", "  (did not run)"]
+
+    # CLEANUP
+    cleanup = ["CLEANUP"]
+    tu = phase_units("teardown")
+    if tu:
+        cleanup.extend(_fixture_lines(tu, ctx, run))
+    if fail and fail["phase"] == "teardown" and fail.get("row", True):
+        cleanup.extend(_align(_unit_rows(fail, ctx, run, "  ", "    ")))
+    if fail and not fail.get("row", True):
+        ctx.checks.append({"res": fail["label"], "where": fail["where"], "what": fail["src"], "val": fail["msg"]})
+    cleanup.extend(_objects_lines(ctx))
+    for p in (e for e in events if e.get("k") == "pcap"):
+        cleanup.append(f"  {'pcap':<21}{_base(p.get('path'))} ({p.get('frames')} frames, in this folder)")
+    out = next((r.get("stdout") for r in (info["reports"].get(w) for w in ("teardown", "call", "setup"))
+                if r and r.get("stdout")), "") or ""
+    printed = [ln for ln in out.splitlines() if ln.strip() and not ln.startswith("pcap written:")
+               and not ln.startswith("-" * 10)]
+    for i, ln in enumerate(printed[:12]):
+        cleanup.append(f"  {('printed' if i == 0 else ''):<21}{_short(ln, 100)}")
+    if len(printed) > 12:
+        cleanup.append(f"  {'':<21}… {len(printed) - 12} more lines (in the pytest-html report)")
+    if session_teardown:
+        cleanup.append(f"  {'end of run':<21}session teardown after this test: {session_teardown} SAI calls (in the .rec)")
+    rep = info["reports"].get("teardown")
+    cleanup.append(f"  teardown: {(rep or {}).get('outcome', 'not reported').upper()}")
+
+    # header (needs the counts collected above)
+    n_pass = sum(1 for c in ctx.checks if c["res"].startswith("PASS"))
+    n_other = len(ctx.checks) - n_pass
+    summary = [_plural(n_pass, "check") + " passed"]
+    if n_other:
+        summary.append(f"{n_other} not passed")
+    summary.append(f"{ctx.sai} SAI calls")
+    summary.append(f"{info['duration']:.1f} s")
+    total = run.collected or len(run.order)
+    head = [f"{'TEST':<9}{t.get('name') or nodeid}",
+            f"{'FILE':<9}{_rel(t.get('file'))}:{t.get('line')}" if t.get("file") else f"{'FILE':<9}{nodeid}",
+            (f"{'RUN':<9}{run.header.get('run')}, test {run.tests.get(nodeid, {}).get('index')} of {total}, "
+             f"commit {run.header.get('commit') or 'unknown'}"),
+            f"{'RESULT':<9}{info['result']}  ({', '.join(summary)})"]
+    if t.get("params"):
+        head.append(f"{'PARAMS':<9}" + ", ".join(f"{k}={v}" for k, v in t["params"].items()))
+    if t.get("markers"):
+        head.append(f"{'MARKERS':<9}" + ", ".join(t["markers"]))
+    doc = [ln.strip() for ln in str(t.get("doc") or "").splitlines() if ln.strip()]
+    if not doc:
+        mdoc = str(t.get("mdoc") or "").strip()
+        doc = [f"(no docstring) File: {mdoc}" if mdoc else "(no docstring)"]
+
+    out = head + [""] + doc + [""]
+    why = _why_lines(info, ctx)
+    if why:
+        out += why + [""]
+    out += ["TEST BED"] + _testbed_lines(run, nodeid) + [""]
+    out += setup + [""] + body + [""] + cleanup + [""]
+    out += ["CHECKS"] + _checks_lines(ctx)
+    info["n_checks"] = len(ctx.checks)
+    info["n_sai"] = ctx.sai
+    return "\n".join(out) + "\n", info
+
+
+def render_test(events, nodeid=None, finished=False):
+    """Plain-text log of one test (the pytest-html block). events: the whole run so far; nodeid
+    defaults to the last test; finished=True when the test's end event is not written yet."""
+    run = Run(events)
+    if not run.order:
+        return "(no test events)\n"
+    return render_one(run, nodeid if nodeid in run.by_test else run.order[-1], finished)[0]
 
 
 def _why(info):
@@ -1089,12 +1676,38 @@ def _why(info):
     if res == "Skipped":
         rep = info["reports"].get("call") or info["reports"].get("setup") or {}
         return _skip_reason(rep)
-    rep = _failing_report(info) or {}
-    msg = _first_line((rep.get("exc") or {}).get("msg") or rep.get("longrepr"), 120)
+    rep = _failing_report(info["reports"]) or {}
+    msg = _first_line((rep.get("exc") or {}).get("msg") or rep.get("longrepr"), 100)
     if res == "Expected gap":
         reason = (info["test"].get("xfail") or {}).get("reason")
-        return reason or msg
+        return _short(reason, 100) if reason else msg
     return msg
+
+
+def render_index(run, infos):
+    h = run.header
+    counts = collections.Counter(i["result"] for _, i, _ in infos)
+    lines = [f"{'RUN':<10}{h.get('run')}",
+             f"{'STARTED':<10}{h.get('start')}",
+             f"{'COMMIT':<10}{h.get('commit') or 'unknown'}",
+             (f"{'PROFILE':<10}{h.get('profile')}, testbed {h.get('testbed')}, "
+              f"traffic {'on' if h.get('traffic') else 'off'}, MLD filter {'on' if h.get('mld') else 'off'}, "
+              f"{h.get('gaps')} expected gaps"),
+             (f"{'VERSIONS':<10}python {h.get('python')}, pytest {h.get('pytest')}, "
+              f"pytest-html {h.get('pytest_html')}, ptf {h.get('ptf')}, scapy {h.get('scapy')}"),
+             f"{'SAI LIB':<10}saichallenger from {h.get('saichallenger')}",
+             f"{'RESULTS':<10}" + ", ".join(f"{r} {counts[r]}" for r in RESULT_ORDER if r in counts)
+             + (f"  (pytest exit status {run.run_end.get('exitstatus')})" if run.run_end else "  (the run did not finish)"),
+             ""]
+    rw = max([len(i["result"]) for _, i, _ in infos] + [6])
+    nw = max([len(t.get("name") or "") for _, _, t in infos] + [4])
+    lines.append(f"{'#':<4}{'result':<{rw + 2}}{'time':>8}  {'test':<{nw}}  why")
+    for idx, info, t in infos:
+        lines.append(f"{idx:<4}{info['result']:<{rw + 2}}{info['duration']:>6.1f} s  {(t.get('name') or ''):<{nw}}  "
+                     f"{_why(info)}".rstrip())
+    lines += ["", "Each test's log is <name>.log in this folder, next to its pcap (traffic tests).",
+              f"Every SAI call of the run, in sairedis.rec grammar: ../{h.get('run')}.rec"]
+    return "\n".join(lines) + "\n"
 
 
 # ---------------------------------------------------------------- sairedis.rec
@@ -1228,27 +1841,43 @@ def _sai_rec(e, oid_type, names):
 
 # ---------------------------------------------------------------- files
 
-def outputs_for(jsonl_path):
+def run_name(jsonl_path):
     p = Path(jsonl_path)
-    base = p.name[: -len(".events.jsonl")] if p.name.endswith(".events.jsonl") else p.stem
-    return p.with_name(base + ".testlog.md"), p.with_name(base + ".rec")
+    return p.name[: -len(".events.jsonl")] if p.name.endswith(".events.jsonl") else p.stem
 
 
 def write_outputs(jsonl_path):
-    """Render <base>.testlog.md and <base>.rec next to <base>.events.jsonl; returns both paths."""
+    """Write <run>/<stem>.log per test, <run>/<prefix>_index.log and <run>.rec next to
+    <run>.events.jsonl. Returns (index path, rec path)."""
     events = load(jsonl_path)
-    md_path, rec_path = outputs_for(jsonl_path)
-    md_path.write_text(render_markdown(events), encoding="utf-8")
+    p = Path(jsonl_path)
+    name = run_name(p)
+    folder = p.with_name(name)
+    folder.mkdir(parents=True, exist_ok=True)
+    run = Run(events)
+    width = max(2, len(str(run.collected or len(run.order))))
+    infos = []
+    for nodeid in run.order:
+        t = run.tests[nodeid]
+        ev = t["ev"]
+        stem = ev.get("stem") or file_stem(run.header.get("run") or name, t["index"], ev.get("width") or width,
+                                           ev.get("name") or nodeid.rsplit("::", 1)[-1])
+        text, info = render_one(run, nodeid)
+        (folder / f"{stem}.log").write_text(text, encoding="utf-8")
+        infos.append((f"{t['index']:0{width}d}", info, ev))
+    index_path = folder / index_name(run.header.get("run") or name)
+    index_path.write_text(render_index(run, infos), encoding="utf-8")
+    rec_path = p.with_name(name + ".rec")
     rec_path.write_text("\n".join(rec_lines(events)) + "\n", encoding="utf-8")
-    return md_path, rec_path
+    return index_path, rec_path
 
 
 def main(argv):
     if len(argv) != 2:
         print("usage: python3 -I testlog_render.py <run>.events.jsonl", file=sys.stderr)
         return 2
-    md_path, rec_path = write_outputs(argv[1])
-    print(f"test log: {md_path}\nrec:      {rec_path}")
+    index_path, rec_path = write_outputs(argv[1])
+    print(f"test logs: {index_path.parent}/\nrec:       {rec_path}")
     return 0
 
 

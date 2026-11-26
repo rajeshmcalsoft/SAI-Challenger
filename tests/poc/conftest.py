@@ -64,7 +64,8 @@ def pytest_configure(config):
     testlog.configure(
         config,
         header={"profile": name or None, "mld": _mld_wanted(config),
-                "gaps": len(profile.get("expected_gaps", {}))},
+                "gaps": len(profile.get("expected_gaps", {})),
+                "ports": profile.get("ports", DEFAULT_PORTS), "filters": profile.get("traffic_filters", [])},
         is_mld=l2.is_mld,
     )
 
@@ -156,6 +157,7 @@ def pcap_capture(request, npu):
     REPORTS.mkdir(exist_ok=True)
     sniffer = AsyncSniffer(iface=PCAP_IFACES, store=True)
     sniffer.start()
+    testlog.record(request.config, "pcap_start", ifaces=PCAP_IFACES)
     time.sleep(1)  # let the sniffer attach before the test sends anything
     try:
         yield sniffer
@@ -164,7 +166,9 @@ def pcap_capture(request, npu):
         if sniffer.running:
             sniffer.stop()
         pkts = sniffer.results or []
-        name = re.sub(r"[^A-Za-z0-9_.-]", "_", request.node.name)
+        # same base name as the test's log file; plain test name when the log is off
+        name = testlog.file_stem(request.config, request.node.nodeid) \
+            or re.sub(r"[^A-Za-z0-9_.-]", "_", request.node.name)
         folder = testlog.run_dir(request.config) or REPORTS  # one folder per run, so runs don't overwrite
         try:
             folder.mkdir(parents=True, exist_ok=True)

@@ -32,9 +32,11 @@ flock /opt/sai-poc/locks/$LOCK.lock "${EXEC[@]}" \
 rc=$?
 "${EXEC[@]}" chown -R "$(id -u):$(id -g)" poc_$ME/reports
 echo "report: $ROOT/tests/poc/reports/$TARGET-$STAMP.{html,xml}  exit=$rc"
-LOG=$ROOT/tests/poc/reports/$TARGET-$STAMP.testlog.md
+# one .log per test in the run folder; the index file name drops the seconds (mmdd-hhmm)
+LOGS=$ROOT/tests/poc/reports/$TARGET-$STAMP
+INDEX=$LOGS/$TARGET-${STAMP:0:9}_index.log
 JSONL=$ROOT/tests/poc/reports/$TARGET-$STAMP.events.jsonl
 # pytest stopped early (an interrupt ends it at once) leaves only the events: render them here
-[ ! -f "$LOG" ] && [ -f "$JSONL" ] && python3 -I "$ROOT/tests/poc/lib/testlog_render.py" "$JSONL" > /dev/null
-[ -f "$LOG" ] && echo "test log: $LOG"
+[ ! -f "$INDEX" ] && [ -f "$JSONL" ] && python3 -I "$ROOT/tests/poc/lib/testlog_render.py" "$JSONL" > /dev/null
+[ -f "$INDEX" ] && echo "test logs: $LOGS/"
 exit $rc
