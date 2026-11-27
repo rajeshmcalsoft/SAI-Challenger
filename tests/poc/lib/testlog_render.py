@@ -815,6 +815,9 @@ class Ctx:
         self.sai = 0
         self.checks = []
         self.last_bad = None
+        self.refused_memo = {}    # failing report -> the refused SAI call behind it (see _refused_for)
+        self.run_events = []      # the whole run (a shared fixture's failure is recorded in an earlier test)
+        self.test_events = []
         self.created = {}         # okey -> {"name", "typ", "attrs"}
         self.removed = {}         # okey -> {"name", "typ"}
         self.last_sent = None
@@ -895,10 +898,13 @@ def _npu_row(u, ctx, run):
     ev = u["ev"]
     names = ctx.names
     left = _npu_args(ev, names)
-    bad, _ = _process_sais(u.get("sais") or [], ctx)
+    bad, views = _process_sais(u.get("sais") or [], ctx)
     ret, exc = ev.get("ret"), ev.get("exc")
     fn = ev.get("fn")
-    if exc:
+    hit = _status_behind(views, exc)
+    if hit:
+        right = f"-> status {names.enum(hit['status'])}  (raised {exc.get('type')})"
+    elif exc:
         right = f"-> raised {exc.get('type')}: {_first_line(exc.get('msg'), 100)}"
     else:
         status, value = None, ret
@@ -934,7 +940,9 @@ def _sai_row(u, ctx):
     if v["op"] == "cleanup":
         return "SAI client cleanup (switch reset)", None
     left = _sai_text(v, ctx.names)
-    if v["exc"]:
+    if _raised_on(v):
+        right = f"-> status {ctx.names.enum(v['status'])}  (raised {v['exc'].get('type')})"
+    elif v["exc"]:
         right = f"-> raised {v['exc'].get('type')}: {_first_line(v['exc'].get('msg'), 100)}"
     elif v["status"] not in (OK, None):
         right = f"-> status {ctx.names.enum(v['status'])}"
@@ -947,6 +955,100 @@ def _sai_row(u, ctx):
     if v["status"] not in (OK, None) or v["exc"]:
         ctx.last_bad = f"{left} {right}"
     return left, right
+
+
+def _names_status(status, msg):
+    """True when msg names this status as a whole word (so ..._1 never matches ..._10)."""
+    return re.search(rf"\b{re.escape(status)}\b", msg) is not None
+
+
+def _raised_on(v):
+    """True when a SAI call raised because of the status the target returned: the clients assert on it
+    (do_assert) and name it in the message, or give no message at all (a bare assert)."""
+    exc, status = v.get("exc") or {}, v.get("status")
+    if not exc or status in (OK, None) or exc.get("type") != "AssertionError":
+        return False
+    msg = str(exc.get("msg") or "")
+    return not msg or _names_status(status, msg)
+
+
+def _status_behind(views, exc):
+    """The SAI call (view) whose status made an npu function raise exc, or None. Either that call raised
+    this very exception on its status, or the function checked the status itself and its AssertionError
+    names it. A non-SUCCESS call the function tolerated is never taken for a later, unrelated error."""
+    if not exc:
+        return None
+    msg = str(exc.get("msg") or "")
+    hit = next((v for v in reversed(views) if _raised_on(v) and str(v["exc"].get("msg") or "") == msg), None)
+    if hit is None and msg and exc.get("type") == "AssertionError":
+        hit = next((v for v in reversed(views) if not v["exc"] and v["status"] not in (OK, None)
+                    and _names_status(v["status"], msg)), None)
+    return hit
+
+
+def _refused_for(ctx, rep):
+    """The refused SAI call behind a failing report, or None: {"status", "type", "npu" (event or None),
+    "view"}. Found in the recorded events, not in the rows rendered so far, so every place in the log gives
+    the same answer; worked out once per report."""
+    exc = (rep or {}).get("exc") or {}
+    msg, typ = str(exc.get("msg") or ""), exc.get("type")
+    if not typ:
+        return None
+    key = (rep.get("seq"), typ, msg)
+    if key not in ctx.refused_memo:
+        ctx.refused_memo[key] = _find_refused(ctx, rep, typ, msg)
+    return ctx.refused_memo[key]
+
+
+def _find_refused(ctx, rep, typ, msg):
+    seq = rep.get("seq") or float("inf")
+
+    def same(e):
+        x = e.get("exc") or {}
+        return bool(x) and str(x.get("msg") or "") == msg and x.get("type") == typ
+
+    if msg:
+        if "SAI_STATUS" not in msg:
+            return None                   # a failure caused by a status names it in its message
+        # every call that raised this very exception (a shared fixture can fail again in a later test)
+        evs = [e for e in ctx.run_events if e.get("k") in ("npu", "sai") and (e.get("seq") or 0) <= seq]
+        npus = [e for e in evs if e["k"] == "npu" and e.get("id") is not None and same(e)]
+        ids = {e["id"] for e in npus}
+    else:
+        # a bare assert (no message): only the last top-level call of this test and phase that raised can
+        # be its source; undo calls after it (leaving a with block) do not raise
+        evs = [e for e in ctx.test_events if e.get("k") in ("npu", "sai") and (e.get("seq") or 0) <= seq
+               and e.get("phase") == rep.get("when")]
+        raised = [e for e in evs if e.get("exc") and ((e["k"] == "npu" and e.get("parent") is None)
+                                                     or (e["k"] == "sai" and e.get("npu") is None
+                                                         and not e.get("depth")))]
+        if not raised or not same(raised[-1]):
+            return None
+        root = raised[-1]
+        npus = [root] if root["k"] == "npu" and root.get("id") is not None else []
+        ids = {e["id"] for e in npus}
+        for e in reversed(evs):           # a call ends after the calls it made: parents come first here
+            if e["k"] == "npu" and e.get("parent") in ids and e.get("id") is not None:
+                ids.add(e["id"])
+        # only the SAI calls under that call: an empty message would match any other bare assert
+        sais = [root] if root["k"] == "sai" else [e for e in evs if e["k"] == "sai" and e.get("npu") in ids]
+    if msg:
+        sais = [e for e in evs if e["k"] == "sai" and (e.get("npu") in ids or same(e))]
+    hit = _status_behind([sai_view(e) for e in sais], {"type": typ, "msg": msg})
+    if hit is None:
+        return None
+    return {"status": hit["status"], "type": typ, "npu": npus[-1] if npus else None, "view": hit}
+
+
+def _refused_call(r, names):
+    """The call that was refused, as the log writes it (built after the log, so it changes no OID's first use)."""
+    return _npu_args(r["npu"], names) if r.get("npu") else _sai_text(r["view"], names)
+
+
+def _fail_val(fail, ctx):
+    """What a failure row and its CHECKS line show: the status the target returned, else pytest's message."""
+    r = _refused_for(ctx, fail["ev"])
+    return f"status {ctx.names.enum(r['status'])} (raised {r['type']})" if r else fail["msg"]
 
 
 def _check_where(ev, ctx):
@@ -1049,8 +1151,9 @@ def _unit_rows(u, ctx, run, prefix, cont):
     if k == "note":
         return [(f"{prefix}note: {u['ev'].get('text')}", None)]
     if k == "fail":
-        ctx.checks.append({"res": u["label"], "where": u["where"], "what": u["src"], "val": u["msg"]})
-        return [(prefix + u["src"], f"{u['label']}  {u['msg']}")]
+        val = _fail_val(u, ctx)
+        ctx.checks.append({"res": u["label"], "where": u["where"], "what": u["src"], "val": val})
+        return [(prefix + u["src"], f"{u['label']}  {val}")]
     return []
 
 
@@ -1474,7 +1577,14 @@ def _why_lines(info, ctx):
         if where:
             rows.append(("where", f"{_base(where.get('file'))}:{where.get('line')}  {_short(where.get('src'), 90)}"))
         msg = [ln for ln in str(exc.get("msg") or "").splitlines() if ln.strip()][:4]
-        if msg:
+        refused = _refused_for(ctx, rep)
+        if refused:
+            # the status first: the client's message names it only at the end, after the whole request
+            status = ctx.names.enum(refused["status"])
+            rows.append(("got", f"status {status}, returned by the target (the call raised {refused['type']})"))
+            if msg:
+                rows.append(("message", _short(msg[0], 120)))
+        elif msg:
             rows.append(("got", f"{exc.get('type')}: {_short(msg[0], 120)}"))
             rows.extend(("", _short(ln, 120)) for ln in msg[1:])
         elif isinstance(rep.get("longrepr"), str):
@@ -1561,6 +1671,7 @@ def render_one(run, nodeid, finished=False):
     names.types.update(run.types)
     names.learn_switch_values(run.seen)
     ctx = Ctx(names, _base(t.get("file")))
+    ctx.run_events, ctx.test_events = run.events, events
     ctx.result = info["result"]
     failing = _failing_report(info["reports"])
     ctx.fail_msg = _first_line(((failing or {}).get("exc") or {}).get("msg")) if failing else ""
@@ -1606,7 +1717,8 @@ def render_one(run, nodeid, finished=False):
     if fail and fail["phase"] == "teardown" and fail.get("row", True):
         cleanup.extend(_align(_unit_rows(fail, ctx, run, "  ", "    ")))
     if fail and not fail.get("row", True):
-        ctx.checks.append({"res": fail["label"], "where": fail["where"], "what": fail["src"], "val": fail["msg"]})
+        ctx.checks.append({"res": fail["label"], "where": fail["where"], "what": fail["src"],
+                           "val": _fail_val(fail, ctx)})
     cleanup.extend(_objects_lines(ctx))
     for p in (e for e in events if e.get("k") == "pcap"):
         cleanup.append(f"  {'pcap':<21}{_base(p.get('path'))} ({p.get('frames')} frames, in this folder)")
@@ -1655,6 +1767,9 @@ def render_one(run, nodeid, finished=False):
     out += ["CHECKS"] + _checks_lines(ctx)
     info["n_checks"] = len(ctx.checks)
     info["n_sai"] = ctx.sai
+    refused = _refused_for(ctx, failing)
+    if refused:
+        info["refused"] = {"status": names.enum(refused["status"]), "call": _refused_call(refused, names)}
     return "\n".join(out) + "\n", info
 
 
@@ -1678,6 +1793,9 @@ def _why(info):
         return _skip_reason(rep)
     rep = _failing_report(info["reports"]) or {}
     msg = _first_line((rep.get("exc") or {}).get("msg") or rep.get("longrepr"), 100)
+    refused = info.get("refused")
+    if refused:
+        msg = _short(f"status {refused['status']} from {refused['call']}", 100)
     if res == "Expected gap":
         reason = (info["test"].get("xfail") or {}).get("reason")
         return _short(reason, 100) if reason else msg
