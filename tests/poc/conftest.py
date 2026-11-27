@@ -12,7 +12,11 @@ from pathlib import Path
 
 import pytest
 
-from .lib import l2
+if __package__:
+    # Before lib is imported, so helper asserts report their values too (test log and failures).
+    pytest.register_assert_rewrite(f"{__package__}.lib")
+
+from .lib import l2, testlog
 
 HERE = Path(__file__).resolve().parent
 TARGETS = HERE / "targets"
@@ -57,6 +61,14 @@ def pytest_configure(config):
             raise pytest.UsageError(f"target profile not found: {path}")
         profile = json.loads(path.read_text())
     config.stash[PROFILE] = profile
+    # Per-test log of real events (lib/testlog.py); written next to the --junitxml report.
+    testlog.configure(
+        config,
+        header={"profile": name or None, "mld": _mld_wanted(config),
+                "gaps": len(profile.get("expected_gaps", {})),
+                "ports": profile.get("ports", DEFAULT_PORTS), "filters": profile.get("traffic_filters", [])},
+        is_mld=l2.is_mld,
+    )
 
 
 def _mld_wanted(config):
@@ -69,6 +81,12 @@ def _mld_wanted(config):
 def pytest_report_header(config):
     name = config.getoption("--target-profile") or "(none)"
     return f"poc target profile: {name} | mld filter: {'on' if _mld_wanted(config) else 'off'}"
+
+
+def pytest_report_teststatus(report, config):
+    """Show expected failures (gaps) as PASSED in the terminal."""
+    if report.when == "call" and report.skipped and hasattr(report, "wasxfail"):
+        return "passed", ".", "PASSED"
 
 
 def pytest_collection_modifyitems(config, items):
@@ -158,7 +176,7 @@ def poc_ports(request, npu):
 
 @pytest.fixture
 def pcap_capture(request, npu):
-    """Sniff the dataplane veths during a test; save reports/<test>.pcap."""
+    """Sniff the dataplane veths during a test; save reports/<target>-<stamp>/<test>.pcap."""
     if not npu.run_traffic:
         yield None
         return
@@ -168,6 +186,7 @@ def pcap_capture(request, npu):
     REPORTS.mkdir(exist_ok=True)
     sniffer = AsyncSniffer(iface=PCAP_IFACES, store=True)
     sniffer.start()
+    testlog.record(request.config, "pcap_start", ifaces=PCAP_IFACES)
     time.sleep(1)  # let the sniffer attach before the test sends anything
     try:
         yield sniffer
@@ -176,7 +195,15 @@ def pcap_capture(request, npu):
         if sniffer.running:
             sniffer.stop()
         pkts = sniffer.results or []
-        name = re.sub(r"[^A-Za-z0-9_.-]", "_", request.node.name)
-        path = REPORTS / f"{name}.pcap"
+        # same base name as the test's log file; plain test name when the log is off
+        name = testlog.file_stem(request.config, request.node.nodeid) \
+            or re.sub(r"[^A-Za-z0-9_.-]", "_", request.node.name)
+        folder = testlog.run_dir(request.config) or REPORTS  # one folder per run, so runs don't overwrite
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            folder = REPORTS
+        path = folder / f"{name}.pcap"
         wrpcap(str(path), pkts)
+        testlog.record(request.config, "pcap", path=str(path), frames=len(pkts))
         print(f"pcap written: {path} ({len(pkts)} packets)")

@@ -13,6 +13,10 @@ from types import SimpleNamespace
 import pytest
 from saichallenger.common.sai_data import SaiObjType
 
+from . import data
+
+D = data.load("l3")  # test-chosen values: tests/poc/data/l3.json
+
 
 def _remove_all(npu, handles):
     """Remove handles in reverse order; try all, then raise the first failure."""
@@ -44,8 +48,7 @@ def port_rif(npu, vrf, poc_ports):
     Turn the first profile port (poc_ports(1)) into a routed port in the `vrf` VRF
     and yield the RIF OID. Afterwards the port is put back into the default VLAN.
     """
-    # Assumes poc_ports(n) returns a list of port indices usable in npu.port_oids
-    # and npu.dot1q_bp_oids (per the Week 2-3 plan); confirm in tests/poc/conftest.py.
+    # poc_ports(n) returns port indices usable in npu.port_oids and npu.dot1q_bp_oids
     port_idx = poc_ports(1)[0]
     port_oid = npu.port_oids[port_idx]
     bp_oid = npu.dot1q_bp_oids[port_idx]
@@ -96,10 +99,6 @@ def port_rif(npu, vrf, poc_ports):
             npu.set(port_oid, ["SAI_PORT_ATTR_PORT_VLAN_ID", npu.default_vlan_id])
 
 
-# VLAN used by the VLAN RIF test (Week 2-3 plan: "Create VLAN 40")
-VLAN_RIF_VLAN_ID = "40"
-
-
 @pytest.fixture
 def vlan_rif(npu, vrf):
     """
@@ -107,12 +106,10 @@ def vlan_rif(npu, vrf):
     Yields SimpleNamespace(rif=<rif oid>, vlan=<vlan oid>).
     Teardown removes the RIF, then the VLAN, even if the test fails.
 
-    SUGGESTION (not from upstream): no bridge ports or VLAN members are created,
-    because Level 1 needs no forwarding. Upstream TestSviNeighbor adds members
-    because it sends packets. Whether each target accepts a member-less VLAN RIF
-    is not verified; if one rejects it, add a member as upstream does.
+    No bridge ports or VLAN members are created, because Level 1 needs no
+    forwarding (upstream TestSviNeighbor adds members because it sends packets).
     """
-    vlan_oid = npu.create(SaiObjType.VLAN, ["SAI_VLAN_ATTR_VLAN_ID", VLAN_RIF_VLAN_ID])
+    vlan_oid = npu.create(SaiObjType.VLAN, ["SAI_VLAN_ATTR_VLAN_ID", D.vlan_rif.vlan_id])
     rif_oid = None
     try:
         rif_oid = npu.create(

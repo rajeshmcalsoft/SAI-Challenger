@@ -74,6 +74,11 @@ If the saivs build fails, run.sh falls back to the prebuilt image. If Docker Hub
 tests/poc/targets/<name>.json holds the testbed, exec options, lock name, usable ports, traffic filters and
 expected_gaps.
 
+Test data is separate. Values a test chooses (VLAN IDs, MACs, packet addresses) live in
+tests/poc/data/<track>.json (for example data/l2.json) and are read with lib/data.py at import time.
+Values the SAI spec defines (status codes, invalid IDs) stay in the test code. Target deviations go only in
+the target profile.
+
 Fields (all read by tests/poc/conftest.py or scripts/poc/run_poc.sh):
 
 | Field | Read by | Meaning |
@@ -114,6 +119,55 @@ Profile in use for saivpp:
 Every run takes the profile's lock, runs inside the right container, and writes tests/poc/reports/<profile>-<time>.html
 and .xml (JUnit). Never run pytest in a container directly. Keep long runs in tmux.
 
+Every run also writes a test log of what really happened (tests/poc/lib/testlog.py; no test file needs anything):
+
+| File | What |
+|---|---|
+| `<profile>-<time>/<profile>-<mmdd-hhmm>_<NN>_<test>.log` | one plain-text log per test, NN in run order: result, the docstring, why it did not pass (if so), the test bed, setup, test body, cleanup and every check |
+| `<profile>-<time>/<profile>-<mmdd-hhmm>_index.log` | run header (commit, versions) and one line per test: result, time, why |
+| `<profile>-<time>/<profile>-<mmdd-hhmm>_<NN>_<test>.pcap` | traffic tests: the frames on the captured ports (section 8) |
+| `<profile>-<time>.events.jsonl` | the raw events, one JSON object per line; the logs and the .rec are rendered from it |
+| `<profile>-<time>.rec` | every SAI call in sairedis.rec grammar, with the exact SAI names and `#|START`/`#|END` test markers (for reading; replaying it with npu.apply_rec is not tested) |
+| `<profile>-<time>.html` | each test row also has a "Test log" block, the same text as its .log |
+
+Reading a test's log:
+- TEST BODY is split by what the code was doing: Configure (entering a tests/poc/lib context manager such as
+  `l2.vlan_member`), Send and check, Test steps or Check (lines of the test itself), and Undo (leaving the with
+  block). Under each: the lib helper call, the `npu.*` functions it called with their result, and
+  "(SAI: 3 get, 1 remove)" when one npu function made several SAI calls. Times are wall-clock, as in the .rec.
+- Attribute and enum names are short (`VLAN_ID`, `UNTAGGED`, `ok`); the .rec has the exact SAI names. Objects are
+  named switch, port[i], bp[i] and default_vlan (from the switch init) and TYPE#n for what the test creates; the OID
+  is shown once, when the object is created.
+- SETUP shows, in every file, the switch init the test ran on: it runs once per run, and again after a failed test.
+- CLEANUP: objects created and removed, objects that existed before and were re-created (they get new OIDs), anything
+  left behind, the pcap, and lines the test printed.
+
+How it is captured: SAI calls at the SAI client (what the test asked and what the target answered); `npu.*` functions
+at the npu object, with where each call came from (the test line and the tests/poc/lib helpers on the call stack);
+checks from pytest's assertion pass hook (run_poc.sh passes `-o enable_assertion_pass_hook=true`) and from the ptf
+`verify_*` functions; packets from the PTF dataplane. The .rec and .jsonl keep every call. A test without a docstring
+shows the first line of its file's docstring instead: add one of up to 3 lines (what is configured, what is sent or
+called, what must pass).
+
+    python3 -I tests/poc/lib/testlog_render.py tests/poc/reports/<run>.events.jsonl   # re-render a run's logs
+    scripts/poc/run_poc.sh saivs poc_$(whoami) -p no:poc_testlog                    # one run without the test log
+
+A run stopped early leaves no .xml or .html: the PTF dataplane (upstream) restores the default SIGINT action, so
+an interrupt ends pytest at once. The .events.jsonl is written as the run goes. When pytest stops but run_poc.sh
+does not (for example pytest killed inside the container), run_poc.sh renders the logs and .rec from it on
+the host. After Ctrl-C in the terminal, run_poc.sh stops too: re-render by hand with the command above. The test that
+was running shows as "Interrupted", with the phases it finished. Needs Python 3.10+ and pytest 7.4+ (the containers
+have Python 3.13 and pytest 9.1).
+
+`-p no:poc_testlog` stops the recording (pcaps then go to tests/poc/reports/<test>.pcap, as before). Two side
+effects stay in every run, and neither changes a result:
+asserts in tests/poc/lib helpers are rewritten by pytest (their failure messages now show values), and
+`-o enable_assertion_pass_hook=true` is set. ACL helpers are loaded as top-level `lib` by test_poc_acl.py and
+test_acl_drop_exp.py, so asserts inside lib/acl.py do not appear as checks (asserts in the test files do).
+
+Not captured: syncd and vendor SAI library logs inside the container. A SAI call whose client returns no status
+(e.g. flush_fdb_entries on saivs-thrift) is shown as "(no status returned by the client)".
+
 ## 7. MLD filter
 
 On saivpp, VPP itself sends IPv6 multicast listener frames (MLD) on its ports. They would break exact-match packet
@@ -132,7 +186,7 @@ test_l2_basic.py on saivpp is flaky (0 to 5 failures of 7 over 18 runs, 5 to 11 
 ## 8. Packet capture
 
 Traffic tests use the pcap_capture fixture: a scapy sniffer on veth1, veth2 and veth3 writes
-tests/poc/reports/<test>.pcap. View with: tcpdump -nn -e -r <file>; in Wireshark use vlan.id == 20 for the VLAN 20 tag.
+tests/poc/reports/<profile>-<time>/<profile>-<mmdd-hhmm>_<NN>_<test>.pcap (one folder per run, next to the test's .log; with `-p no:poc_testlog`, tests/poc/reports/<test>.pcap). View with: tcpdump -nn -e -r <file>; in Wireshark filter on vlan.id == <vlan_id from tests/poc/data/l2.json> (20 by default).
 
 ## 8a. Test parameters
 
@@ -144,7 +198,9 @@ environment variables override the `acl_exp` section.
 ## 9. Expected gaps
 
 A deviation from the SAI specification is not hidden: the test stays and is listed in expected_gaps in the profile
-with a reason. The test is then reported as PASSED (summarize.py shows it as PASS* and lists the reason under Known gaps); strict: if it starts to pass, the run fails ("KNOWN GAP CLOSED") and the entry is removed.
+with a reason. The test is then reported as xfail (strict: if it starts to pass, the run fails and the gap is removed).
+By design, the terminal prints an xfail as PASSED (pytest_report_teststatus in conftest.py), so the terminal
+summary counts it as passed. The XML and HTML reports still record it as xfail with the reason; count gaps from those.
 A "[" in a pattern is literal, so test_poc_l2_vlan_invalid_id_rejected[4095] matches that exact test id.
 Add one: python3 add_gap.py <profile> '<test name>' '<reason>'.
 
@@ -179,6 +235,8 @@ that profile has been run):
 | report folder not writable | files created as root in the container | run_poc.sh chowns the folder at the end; chown manually if a run was killed |
 | run waits "for the lock" | someone else is running | wait; do not kill their run |
 | pcap file missing | the test did not finish or capture is off | rerun the single test with --traffic |
+| no test logs after a run | the run was killed before the end | re-render them from the .events.jsonl (section 6) |
+| test log shows no `assert ... PASS` lines | `-o enable_assertion_pass_hook=true` missing (pytest run outside run_poc.sh), or an old pytest-rewritten .pyc under tests/poc that run_poc.sh could not delete (root-owned) | use run_poc.sh; `find tests/poc -name '*-pytest-*.pyc'` and remove what it lists |
 | exec.sh prints "exit code 3" after supervisorctl status | one-shot jobs (dependent-startup, vpp-veth-creator, veth-creator) are EXITED by design | normal; only a long-running process not RUNNING is a problem |
 | test_l2_basic.py on saivpp fails with a 33:33:... frame | MLD stray frame; upstream tests do not load the PoC filter | use the PoC tests, which filter MLD |
 | exec.sh mangles a quoted argument (sh -c '...') | exec.sh wraps the command in its own bash -c | run the pipe on the host: ./exec.sh ... cmd 2>&1 \| grep ... |

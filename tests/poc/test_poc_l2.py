@@ -6,25 +6,39 @@ deviation is an expected gap in tests/poc/targets/<profile>.json, not in this fi
 import pytest
 from saichallenger.common.sai_data import SaiObjType
 
-from .lib import l2
+from .lib import data, l2
 
 pytestmark = pytest.mark.l2
 
-VLAN_ID = "20"
-MAC = "00:11:11:11:11:11"
+D = data.load("l2")  # test-chosen values: tests/poc/data/l2.json
+l2.check_data(D)
+VLAN_ID = str(D.vlan_id)
+OTHER_VLAN_ID = str(D.second_vlan_id)
+MAC = D.macs[0]
+
+# defined by the SAI spec, so they stay here
 SUCCESS = "SAI_STATUS_SUCCESS"
 EXISTS = "SAI_STATUS_ITEM_ALREADY_EXISTS"
+IN_USE = "SAI_STATUS_OBJECT_IN_USE"
 
 
 def test_poc_l2_vlan_readback(npu):
-    """VLAN 20 is created and SAI_VLAN_ATTR_VLAN_ID reads back as 20."""
+    """The test VLAN is created and SAI_VLAN_ATTR_VLAN_ID reads back as its ID.
+
+    Creates VLAN vlan_id from data/l2.json, reads SAI_VLAN_ATTR_VLAN_ID and compares it with the ID it was
+    created with. The VLAN is removed on exit.
+    """
     with l2.vlan(npu, VLAN_ID) as vlan_oid:
-        data = npu.get(vlan_oid, ["SAI_VLAN_ATTR_VLAN_ID"])
-        assert data.value() == VLAN_ID
+        attr = npu.get(vlan_oid, ["SAI_VLAN_ATTR_VLAN_ID"])
+        assert attr.value() == VLAN_ID
 
 
 def test_poc_l2_vlan_member_readback(npu, poc_ports):
-    """A tagged member reads back SAI_VLAN_TAGGING_MODE_TAGGED on the right bridge port."""
+    """A tagged member reads back SAI_VLAN_TAGGING_MODE_TAGGED on the right bridge port.
+
+    Adds the first profile port to the test VLAN as a tagged member, then reads the member's tagging mode and
+    bridge port, and checks that the VLAN's SAI_VLAN_ATTR_MEMBER_LIST contains the member.
+    """
     (p,) = poc_ports(1)
     with l2.vlan(npu, VLAN_ID) as vlan_oid, \
             l2.vlan_member(npu, vlan_oid, p, l2.TAGGED) as member_oid:
@@ -37,7 +51,11 @@ def test_poc_l2_vlan_member_readback(npu, poc_ports):
 
 
 def test_poc_l2_fdb_static_readback(npu, poc_ports):
-    """A static FDB entry reads back with the right bridge port."""
+    """A static FDB entry reads back with the right bridge port.
+
+    Makes the first profile port an untagged member of the test VLAN, adds a static FDB entry for macs[0] on
+    it, then reads SAI_FDB_ENTRY_ATTR_BRIDGE_PORT_ID and compares it with that port's bridge port.
+    """
     (p,) = poc_ports(1)
     with l2.vlan(npu, VLAN_ID) as vlan_oid, \
             l2.vlan_member(npu, vlan_oid, p), \
@@ -49,7 +67,11 @@ def test_poc_l2_fdb_static_readback(npu, poc_ports):
 
 @pytest.mark.negative
 def test_poc_l2_vlan_duplicate_rejected(npu):
-    """Creating VLAN 20 twice fails with SAI_STATUS_ITEM_ALREADY_EXISTS."""
+    """Creating the test VLAN twice fails with SAI_STATUS_ITEM_ALREADY_EXISTS.
+
+    Creates the test VLAN, then creates a second VLAN with the same ID and checks the status returned. If the
+    target accepts the duplicate, the test removes it again.
+    """
     with l2.vlan(npu, VLAN_ID):
         status, dup_oid = npu.create(
             SaiObjType.VLAN, ["SAI_VLAN_ATTR_VLAN_ID", VLAN_ID], do_assert=False)
@@ -63,7 +85,11 @@ def test_poc_l2_vlan_duplicate_rejected(npu):
 @pytest.mark.negative
 @pytest.mark.parametrize("bad_id", ["0", "4095", "4096"])
 def test_poc_l2_vlan_invalid_id_rejected(npu, bad_id):
-    """Creating a VLAN with ID 0, 4095 or 4096 fails."""
+    """Creating a VLAN with ID 0, 4095 or 4096 fails.
+
+    Creates a VLAN with the given ID; any status other than SAI_STATUS_SUCCESS passes. A VLAN the target
+    accepts is removed again.
+    """
     status, vlan_oid = npu.create(
         SaiObjType.VLAN, ["SAI_VLAN_ATTR_VLAN_ID", bad_id], do_assert=False)
     try:
@@ -72,40 +98,48 @@ def test_poc_l2_vlan_invalid_id_rejected(npu, bad_id):
         if status == SUCCESS:
             npu.remove(vlan_oid)
 
-IN_USE = "SAI_STATUS_OBJECT_IN_USE"
-
 
 @pytest.mark.negative
 def test_poc_l2_remove_vlan_with_members_rejected(npu, poc_ports):
-    """Removing a VLAN that still has a member fails with OBJECT_IN_USE; the VLAN stays."""
+    """Removing a VLAN that still has a member fails with OBJECT_IN_USE; the VLAN stays.
+
+    Creates the second test VLAN with the first profile port as a tagged member, tries to remove the VLAN, then
+    checks the status and that SAI_VLAN_ATTR_VLAN_ID still reads back. If the remove succeeds, the switch is reset.
+    """
     (p,) = poc_ports(1)
-    vlan30 = npu.create(SaiObjType.VLAN, ["SAI_VLAN_ATTR_VLAN_ID", "30"])
-    member = npu.create_vlan_member(vlan30, npu.dot1q_bp_oids[p], l2.TAGGED)
-    status = npu.remove(vlan30, do_assert=False)
+    other_vlan = npu.create(SaiObjType.VLAN, ["SAI_VLAN_ATTR_VLAN_ID", OTHER_VLAN_ID])
+    member = npu.create_vlan_member(other_vlan, npu.dot1q_bp_oids[p], l2.TAGGED)
+    status = npu.remove(other_vlan, do_assert=False)
     try:
         assert status == IN_USE, f"target removes a VLAN that has members: {status}"
-        assert npu.get(vlan30, ["SAI_VLAN_ATTR_VLAN_ID"]).value() == "30"
+        assert npu.get(other_vlan, ["SAI_VLAN_ATTR_VLAN_ID"]).value() == OTHER_VLAN_ID
     finally:
         if status == SUCCESS:
             npu.reset()  # the VLAN is gone but its member may remain; tell the team channel
         else:
             npu.remove(member)
-            npu.remove(vlan30)
+            npu.remove(other_vlan)
 
 
 @pytest.mark.negative
 def test_poc_l2_remove_bridge_port_in_use_rejected(npu, poc_ports):
-    """Removing a bridge port that is a VLAN member fails with OBJECT_IN_USE; the port stays."""
+    """Removing a bridge port that is a VLAN member fails with OBJECT_IN_USE; the port stays.
+
+    Makes the first profile port's bridge port a tagged member of the second test VLAN, tries to remove the
+    bridge port, then checks the status and that SAI_BRIDGE_PORT_ATTR_PORT_ID still reads back as that port.
+    If the remove succeeds, the switch is reset.
+    """
     (p,) = poc_ports(1)
     bp_oid = npu.dot1q_bp_oids[p]
-    vlan30 = npu.create(SaiObjType.VLAN, ["SAI_VLAN_ATTR_VLAN_ID", "30"])
-    member = npu.create_vlan_member(vlan30, bp_oid, l2.TAGGED)
+    other_vlan = npu.create(SaiObjType.VLAN, ["SAI_VLAN_ATTR_VLAN_ID", OTHER_VLAN_ID])
+    member = npu.create_vlan_member(other_vlan, bp_oid, l2.TAGGED)
     status = npu.remove(bp_oid, do_assert=False)
     try:
         assert status == IN_USE, f"target removes a bridge port that is in use: {status}"
+        assert npu.get(bp_oid, ["SAI_BRIDGE_PORT_ATTR_PORT_ID"]).oid() == npu.port_oids[p]
     finally:
         if status == SUCCESS:
             npu.reset()  # the default bridge port is gone; tell the team channel
         else:
             npu.remove(member)
-            npu.remove(vlan30)
+            npu.remove(other_vlan)

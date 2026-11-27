@@ -13,31 +13,37 @@ from ptf.testutils import (
     verify_packets,
 )
 
-from .lib import l2
+from .lib import data, l2
 
 pytestmark = [pytest.mark.l2, pytest.mark.traffic]
 
-VLAN_ID = "20"
-MACS = ["00:11:11:11:11:11", "00:22:22:22:22:22", "00:33:33:33:33:33"]
-BCAST = "ff:ff:ff:ff:ff:ff"
+D = data.load("l2")  # test-chosen values: tests/poc/data/l2.json
+l2.check_data(D)
+VLAN_ID = str(D.vlan_id)
+MACS = D.macs
+BCAST = "ff:ff:ff:ff:ff:ff"  # defined by Ethernet, so it stays here
 
 
 def tcp(eth_dst, eth_src, vlan=None, ip_id=101):
-    """A TCP packet; with vlan set it carries that 802.1Q tag (104 bytes, as upstream)."""
+    """A TCP packet; with vlan set it carries that 802.1Q tag (packet.tagged_pktlen bytes)."""
     args = {
         "eth_dst": eth_dst,
         "eth_src": eth_src,
-        "ip_dst": "10.0.0.1",
+        "ip_dst": D.packet.ip_dst,
         "ip_id": ip_id,
-        "ip_ttl": 64,
+        "ip_ttl": D.packet.ip_ttl,
     }
     if vlan is not None:
-        args.update(dl_vlan_enable=True, vlan_vid=int(vlan), pktlen=104)
+        args.update(dl_vlan_enable=True, vlan_vid=int(vlan), pktlen=D.packet.tagged_pktlen)
     return simple_tcp_packet(**args)
 
 
 def test_poc_l2_access_forward_both_ways(npu, dataplane, pcap_capture, poc_ports):
-    """VLAN 20 on three access ports: frames p0 -> p2 and p2 -> p0 arrive only on the destination."""
+    """The test VLAN on three access ports: frames p0 -> p2 and p2 -> p0 arrive only on the destination.
+
+    Each port is an untagged member (PVID = the VLAN ID) with a static FDB entry for its MAC. Each frame must
+    arrive on its destination port and on no other port.
+    """
     p0, p1, p2 = poc_ports(3)
     with l2.access_vlan(npu, VLAN_ID, {p0: MACS[0], p1: MACS[1], p2: MACS[2]}):
         forward = tcp(MACS[2], MACS[0], ip_id=101)
@@ -52,7 +58,11 @@ def test_poc_l2_access_forward_both_ways(npu, dataplane, pcap_capture, poc_ports
 
 
 def test_poc_l2_access_to_trunk_tag_push(npu, dataplane, pcap_capture, poc_ports):
-    """An untagged frame from an access port leaves the trunk port tagged with VLAN 20."""
+    """An untagged frame from an access port leaves the trunk port tagged with the test VLAN.
+
+    p0 is an untagged (access) member and p1 a tagged (trunk) member, each with a static FDB entry. A frame
+    sent untagged on p0 must leave p1 only, with an 802.1Q tag carrying the VLAN ID.
+    """
     p0, p1 = poc_ports(2)
     with l2.vlan(npu, VLAN_ID) as vlan_oid, \
             l2.vlan_member(npu, vlan_oid, p0, l2.UNTAGGED), \
@@ -66,7 +76,11 @@ def test_poc_l2_access_to_trunk_tag_push(npu, dataplane, pcap_capture, poc_ports
 
 
 def test_poc_l2_trunk_to_access_tag_pop(npu, dataplane, pcap_capture, poc_ports):
-    """A tagged frame from the trunk port leaves the access port untagged."""
+    """A tagged frame from the trunk port leaves the access port untagged.
+
+    p0 is a tagged (trunk) member and p1 an untagged (access) member, each with a static FDB entry. A frame
+    sent on p0 tagged with the VLAN ID must leave p1 only, without the tag.
+    """
     p0, p1 = poc_ports(2)
     with l2.vlan(npu, VLAN_ID) as vlan_oid, \
             l2.vlan_member(npu, vlan_oid, p0, l2.TAGGED), \
@@ -80,7 +94,11 @@ def test_poc_l2_trunk_to_access_tag_pop(npu, dataplane, pcap_capture, poc_ports)
 
 
 def test_poc_l2_unknown_unicast_flood(npu, dataplane, pcap_capture, poc_ports):
-    """A frame to an unknown MAC reaches every other VLAN member and no other port."""
+    """A frame to an unknown MAC reaches every other VLAN member and no other port.
+
+    Three untagged members and no FDB entries: a frame from p0 to macs[2] must arrive on p1 and p2 only.
+    Learned FDB entries are flushed on exit.
+    """
     p0, p1, p2 = poc_ports(3)
     with l2.vlan(npu, VLAN_ID) as vlan_oid, \
             l2.vlan_member(npu, vlan_oid, p0), \
@@ -96,7 +114,11 @@ def test_poc_l2_unknown_unicast_flood(npu, dataplane, pcap_capture, poc_ports):
 
 
 def test_poc_l2_broadcast_flood(npu, dataplane, pcap_capture, poc_ports):
-    """A broadcast frame reaches every other VLAN member and no other port."""
+    """A broadcast frame reaches every other VLAN member and no other port.
+
+    Three untagged members: a frame from p0 to ff:ff:ff:ff:ff:ff must arrive on p1 and p2 only. Learned FDB
+    entries are flushed on exit.
+    """
     p0, p1, p2 = poc_ports(3)
     with l2.vlan(npu, VLAN_ID) as vlan_oid, \
             l2.vlan_member(npu, vlan_oid, p0), \
@@ -109,7 +131,11 @@ def test_poc_l2_broadcast_flood(npu, dataplane, pcap_capture, poc_ports):
 
 
 def test_poc_l2_mac_learning(npu, dataplane, pcap_capture, poc_ports):
-    """After one frame from MAC A, a frame to MAC A goes only to A's port (model: test_l2_mac_move_1)."""
+    """After one frame from MAC A, a frame to MAC A goes only to A's port (model: test_l2_mac_move_1).
+
+    Three untagged members, no static entries: A -> B floods to p1 and p2, then B -> A goes only to p0, and
+    after 1 s a second A -> B goes only to p1, with nothing on p2. Learned entries are flushed on exit.
+    """
     p0, p1, p2 = poc_ports(3)
     with l2.vlan(npu, VLAN_ID) as vlan_oid, \
             l2.vlan_member(npu, vlan_oid, p0), \
