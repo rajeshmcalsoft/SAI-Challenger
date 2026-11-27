@@ -24,6 +24,7 @@ REPORTS = HERE / "reports"
 DEFAULT_PORTS = list(range(8))
 PCAP_IFACES = ["veth1", "veth2", "veth3"]  # PTF ports 0-2 (see the testbed file)
 PROFILE = pytest.StashKey[dict]()
+GAP = pytest.StashKey[str]()            # reason, on tests the profile lists in expected_gaps
 
 MARKERS = (
     ("l2", "Track A: L2 forwarding and VLANs"),
@@ -89,14 +90,42 @@ def pytest_report_teststatus(report, config):
 
 
 def pytest_collection_modifyitems(config, items):
-    """Mark every test named in the profile's expected_gaps as strict xfail."""
+    """Remember, on every test named in the profile's expected_gaps, why it is a known gap.
+
+    A known gap is NOT an xfail any more: the test runs normally, and pytest_runtest_makereport
+    (below) reports it as PASSED when it fails as the profile predicts. If it starts to pass,
+    the gap is closed and the test is reported FAILED, so the profile entry gets removed (the
+    same strictness the old strict xfail had)."""
     gaps = config.stash[PROFILE].get("expected_gaps", {})
     for item in items:
         for pattern, reason in gaps.items():
             # '[' is literal (parametrized ids like name[4095]); '*' and '?' stay wildcards
             if fnmatch.fnmatchcase(item.name, pattern.replace("[", "[[]")):
-                item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
+                item.stash[GAP] = reason
                 break
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    rep = outcome.get_result()
+    gap = item.stash.get(GAP, None)
+    # A test may prove at run time that it hit a known target defect (see
+    # test_poc_counters_delta): it adds ("dynamic_gap", reason) to user_properties.
+    # Unlike a profile gap, it may pass or fail without being called "gap closed".
+    dyn = next((v for k, v in reversed(item.user_properties) if k == "dynamic_gap"), None)
+    if dyn and not gap and rep.when == "call" and rep.failed:
+        gap = dyn
+    if gap and rep.when == "call":
+        if rep.failed:
+            # fails exactly as the profile predicts -> a PASS; the reason travels in the XML
+            rep.outcome = "passed"
+            rep.longrepr = None
+            item.user_properties.append(("known_gap", gap))
+        elif rep.passed:
+            rep.outcome = "failed"
+            rep.longrepr = ("KNOWN GAP CLOSED: this test passed although the target profile lists it in "
+                            f"expected_gaps ({gap}). Remove the entry from tests/poc/targets/<profile>.json.")
 
 
 @pytest.fixture(scope="module", autouse=True)

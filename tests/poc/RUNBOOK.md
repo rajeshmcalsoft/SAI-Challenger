@@ -89,7 +89,7 @@ Fields (all read by tests/poc/conftest.py or scripts/poc/run_poc.sh):
 | lock | run_poc.sh | lock file /opt/sai-poc/locks/<lock>.lock taken with flock for the whole run |
 | ports | conftest.py (poc_ports) | usable port indices; poc_ports(n) returns the first n and skips the test if fewer |
 | traffic_filters | conftest.py | list of frame filters; "mld" turns the MLD filter on when --mld-filter is auto |
-| expected_gaps | conftest.py | test name to reason; each named test is marked as strict xfail |
+| expected_gaps | conftest.py | test name to reason; a named test that fails as predicted is reported PASSED (reason kept in the XML property `known_gap`); one that starts to pass is reported FAILED |
 
 Profile in use for saivpp:
 
@@ -187,6 +187,13 @@ test_l2_basic.py on saivpp is flaky (0 to 5 failures of 7 over 18 runs, 5 to 11 
 
 Traffic tests use the pcap_capture fixture: a scapy sniffer on veth1, veth2 and veth3 writes
 tests/poc/reports/<profile>-<time>/<profile>-<mmdd-hhmm>_<NN>_<test>.pcap (one folder per run, next to the test's .log; with `-p no:poc_testlog`, tests/poc/reports/<test>.pcap). View with: tcpdump -nn -e -r <file>; in Wireshark filter on vlan.id == <vlan_id from tests/poc/data/l2.json> (20 by default).
+
+## 8a. Test parameters
+
+Ports, VLAN, MACs, IPs, TCP ports, priorities, packet counts, counter names and ACL defaults of the ACL and counter
+tests live in `tests/poc/data/ACL.json` (read through `lib/params.py`). Edit the JSON, not the `.py` files.
+`POC_PARAMS=<file>` selects another file. `test_acl_drop_exp.py` still lets `acl_exp_config.json` and `ACL_*`
+environment variables override the `acl_exp` section.
 
 ## 9. Expected gaps
 

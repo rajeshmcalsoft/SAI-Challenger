@@ -1,0 +1,158 @@
+{
+  "_about": "Every test parameter of tests/poc (ports, VLAN, MACs, IPs, priorities, packet counts, counter names, ACL defaults). Edit values here, not in the .py files. Read by lib/params.py. Another file can be selected with the POC_PARAMS environment variable. test_acl_drop_exp.py additionally lets acl_exp_config.json and ACL_* environment variables override the 'acl_exp' section.",
+  "traffic": {
+    "_about": "Packet path shared by the traffic tests: frames enter switch port in_idx and must leave port out_idx.",
+    "in_idx": 0,
+    "out_idx": 1,
+    "vlan_id": "10",
+    "vlan_tagging_mode": "SAI_VLAN_TAGGING_MODE_UNTAGGED",
+    "pvid_attr": "SAI_PORT_ATTR_PORT_VLAN_ID",
+    "src_mac": "00:11:11:11:11:11",
+    "dst_mac": "00:22:22:22:22:22",
+    "ip_src": "20.0.0.2",
+    "ip_dst": "192.168.1.10",
+    "tcp_sport": 1234,
+    "ip_ttl": 64,
+    "verify_timeout_s": 2
+  },
+  "acl": {
+    "_about": "ACL helper defaults (lib/acl.py) and the values used by test_poc_acl.py",
+    "stage": "INGRESS",
+    "bind_point": "PORT",
+    "action_type": "SAI_ACL_ACTION_TYPE_PACKET_ACTION",
+    "port_acl_attr": "SAI_PORT_ATTR_INGRESS_ACL",
+    "unbound_oid": "oid:0x0",
+    "entry_admin_state": "true",
+    "group_type": "SAI_ACL_TABLE_GROUP_TYPE_PARALLEL",
+    "group_member_priority": "100",
+    "basic_fields": [
+      "IP_PROTOCOL",
+      "L4_DST_PORT"
+    ],
+    "ipv6_fields": [
+      "SRC_IPV6"
+    ],
+    "mac_fields": [
+      "DST_MAC"
+    ],
+    "tcp_protocol": "6",
+    "protocol_mask": "0xff",
+    "l4_port_mask": "0xffff",
+    "bind_mode": "group",
+    "poc_ports_count": 4,
+    "level1": {
+      "entry_l4_dst_port": "80",
+      "drop_entry_priority": 10,
+      "priority_readback_value": 42,
+      "src_ipv6": {
+        "value": "2001:db8::1",
+        "mask": "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
+      },
+      "dst_mac": {
+        "value": "00:11:22:33:44:55",
+        "mask": "FF:FF:FF:FF:FF:FF"
+      },
+      "unknown_field_candidates": [
+        [
+          "SRC_IPV6",
+          "2001:db8::1",
+          "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
+        ],
+        [
+          "DST_IPV6",
+          "2001:db8::2",
+          "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
+        ],
+        [
+          "L4_SRC_PORT",
+          "12345",
+          "65535"
+        ],
+        [
+          "L4_DST_PORT",
+          "443",
+          "65535"
+        ],
+        [
+          "IP_PROTOCOL",
+          "6",
+          "255"
+        ],
+        [
+          "DST_MAC",
+          "00:11:22:33:44:55",
+          "FF:FF:FF:FF:FF:FF"
+        ]
+      ],
+      "unknown_field_control_priority_base": 100,
+      "unknown_field_experiment_priority_base": 200
+    },
+    "drop_test": {
+      "_about": "TestPocAclDrop: DROP drop_port (high priority), FORWARD fwd_port, other_port matches nothing",
+      "drop_port": 80,
+      "fwd_port": 81,
+      "other_port": 82,
+      "drop_priority": 200,
+      "fwd_priority": 100
+    },
+    "permit_priority_test": {
+      "_about": "TestPocAclPermitPriority: a bigger priority number wins",
+      "prio_port": 80,
+      "ctrl_drop_port": 81,
+      "reverse_port": 82,
+      "low_prio": 100,
+      "high_prio": 200
+    }
+  },
+  "counters": {
+    "clear_read": {
+      "stats": [
+        "SAI_PORT_STAT_IF_IN_OCTETS",
+        "SAI_PORT_STAT_IF_IN_UCAST_PKTS",
+        "SAI_PORT_STAT_IF_OUT_OCTETS",
+        "SAI_PORT_STAT_IF_OUT_UCAST_PKTS"
+      ],
+      "retries": 3
+    },
+    "delta": {
+      "packets": 10,
+      "control_allowance": 5,
+      "settle_seconds": 10,
+      "poll_seconds": 1,
+      "tcp_dport": 80,
+      "in_pkts_stat": "SAI_PORT_STAT_IF_IN_UCAST_PKTS",
+      "out_pkts_stat": "SAI_PORT_STAT_IF_OUT_UCAST_PKTS",
+      "candidate_stats": [
+        "SAI_PORT_STAT_IF_IN_UCAST_PKTS",
+        "SAI_PORT_STAT_IF_IN_NON_UCAST_PKTS",
+        "SAI_PORT_STAT_IF_IN_OCTETS",
+        "SAI_PORT_STAT_IF_IN_DISCARDS",
+        "SAI_PORT_STAT_IF_IN_ERRORS",
+        "SAI_PORT_STAT_ETHER_IN_PKTS_65_TO_127_OCTETS",
+        "SAI_PORT_STAT_IF_OUT_UCAST_PKTS",
+        "SAI_PORT_STAT_IF_OUT_NON_UCAST_PKTS",
+        "SAI_PORT_STAT_IF_OUT_OCTETS",
+        "SAI_PORT_STAT_ETHER_OUT_PKTS_65_TO_127_OCTETS"
+      ],
+      "vpp_ifname_format": "host-eth{n}",
+      "vpp_port_number_base": 1
+    }
+  },
+  "acl_exp": {
+    "_about": "Defaults of test_acl_drop_exp.py. acl_exp_config.json and ACL_* environment variables override these.",
+    "in_port": 0,
+    "out_port": 1,
+    "drop_tcp_port": 80,
+    "fwd_tcp_port": 81,
+    "other_tcp_port": 82,
+    "vlan_id": 10,
+    "bind_mode": "table",
+    "timeout": 2,
+    "drop_priority": 200,
+    "fwd_priority": 100,
+    "fields": [
+      "IP_PROTOCOL",
+      "L4_DST_PORT"
+    ]
+  }
+}
