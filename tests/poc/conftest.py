@@ -100,7 +100,7 @@ def pytest_runtest_makereport(item, call):
         gap = dyn
     if gap and rep.when == "call":
         if rep.failed:
-            # fails exactly as the profile predicts -> a PASS; the reason travels in the XML/log
+            # fails exactly as the profile predicts -> a PASS; the reason travels in the XML
             rep.outcome = "passed"
             rep.longrepr = None
             item.user_properties.append(("known_gap", gap))
