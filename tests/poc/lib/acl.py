@@ -1,25 +1,20 @@
-"""
-lib/acl.py - helper library for ACL tests (a library, not a test; nothing to run).
+"""lib/acl.py - helper library for ACL tests (not a test).
 
-Tests import it:   from lib.acl import AclHelper
+    from lib.acl import AclHelper
 
-Wraps only calls the existing ut/test_acl_ut.py already uses:
-    npu.create(SaiObjType.X, [attr, value, ...])                    -> oid
-    npu.create(SaiObjType.ACL_ENTRY, [...], do_assert=False)        -> (status, oid)
-    npu.set(oid, [attr, value]) / npu.remove(oid)
-
-Every object it creates is remembered, so cleanup() removes them in REVERSE order of
-dependency:  unbind ports -> entries -> group members -> groups -> tables.
-cleanup() is safe to call any number of times and never raises.
-
-Single-object helpers (unbind_port, remove_entry, remove_group, remove_table) are strict:
-they raise if SAI refuses, so a test can assert on them.
+Wraps npu.create / set / remove for ACL tables, entries, groups and port binding, and
+remembers every object so cleanup() removes them in reverse order (safe to call any
+number of times, never raises). Single-object helpers raise if SAI refuses.
 """
 from saichallenger.common.sai_data import SaiObjType
 
+from .params import load
+
+# Defaults come from data/ACL.json ("acl" section); only the SAI status name stays here.
+_ACL = load()["acl"]
 OK = "SAI_STATUS_SUCCESS"
-UNBOUND = "oid:0x0"
-PORT_ACL_ATTR = "SAI_PORT_ATTR_INGRESS_ACL"
+UNBOUND = _ACL["unbound_oid"]
+PORT_ACL_ATTR = _ACL["port_acl_attr"]
 
 
 class AclHelper:
@@ -31,12 +26,12 @@ class AclHelper:
         self.log = []               # (what, status) - handy to print
 
     # ---- create --------------------------------------------------------
-    def create_table(self, fields, stage="INGRESS", bind_point="PORT"):
+    def create_table(self, fields, stage=_ACL["stage"], bind_point=_ACL["bind_point"]):
         """fields: names without prefix, e.g. ["IP_PROTOCOL", "L4_DST_PORT"]."""
         attrs = [
             "SAI_ACL_TABLE_ATTR_ACL_STAGE", f"SAI_ACL_STAGE_{stage}",
             "SAI_ACL_TABLE_ATTR_ACL_BIND_POINT_TYPE_LIST", f"1:SAI_ACL_BIND_POINT_TYPE_{bind_point}",
-            "SAI_ACL_TABLE_ATTR_ACL_ACTION_TYPE_LIST", "1:SAI_ACL_ACTION_TYPE_PACKET_ACTION",
+            "SAI_ACL_TABLE_ATTR_ACL_ACTION_TYPE_LIST", f"1:{_ACL['action_type']}",
         ]
         for f in fields:
             attrs += [f"SAI_ACL_TABLE_ATTR_FIELD_{f}", "true"]
@@ -51,7 +46,7 @@ class AclHelper:
         attrs = [
             "SAI_ACL_ENTRY_ATTR_TABLE_ID", table,
             "SAI_ACL_ENTRY_ATTR_PRIORITY", str(priority),
-            "SAI_ACL_ENTRY_ATTR_ADMIN_STATE", "true",
+            "SAI_ACL_ENTRY_ATTR_ADMIN_STATE", _ACL["entry_admin_state"],
             "SAI_ACL_ENTRY_ATTR_ACTION_PACKET_ACTION", action,
         ]
         for name, value, mask in match:
@@ -62,12 +57,13 @@ class AclHelper:
             self.entries.append(oid)
         return status, oid
 
-    def create_group(self, table, stage="INGRESS", bind_point="PORT", priority="100"):
+    def create_group(self, table, stage=_ACL["stage"], bind_point=_ACL["bind_point"],
+                     priority=_ACL["group_member_priority"]):
         """Optional: table group + one member holding `table`. Returns the group oid."""
         group = self.npu.create(SaiObjType.ACL_TABLE_GROUP, [
             "SAI_ACL_TABLE_GROUP_ATTR_ACL_STAGE", f"SAI_ACL_STAGE_{stage}",
             "SAI_ACL_TABLE_GROUP_ATTR_ACL_BIND_POINT_TYPE_LIST", f"1:SAI_ACL_BIND_POINT_TYPE_{bind_point}",
-            "SAI_ACL_TABLE_GROUP_ATTR_TYPE", "SAI_ACL_TABLE_GROUP_TYPE_PARALLEL",
+            "SAI_ACL_TABLE_GROUP_ATTR_TYPE", _ACL["group_type"],
         ])
         self.groups.append(group)
         member = self.npu.create(SaiObjType.ACL_TABLE_GROUP_MEMBER, [
@@ -82,20 +78,23 @@ class AclHelper:
     # ---- bind / unbind -------------------------------------------------
     def bind_to_port(self, acl_oid, port_oid, attr=PORT_ACL_ATTR):
         """acl_oid: a table oid, or a group oid from create_group()."""
-        self.npu.set(port_oid, [attr, acl_oid])
+        status = self.npu.set(port_oid, [attr, acl_oid])
         self.bindings.append((port_oid, attr))
         self.log.append((f"bind port {port_oid}", OK))
+        return status
 
     def unbind_port(self, port_oid, attr=PORT_ACL_ATTR):
-        self.npu.set(port_oid, [attr, UNBOUND])
+        status = self.npu.set(port_oid, [attr, UNBOUND])
         self.bindings = [b for b in self.bindings if b != (port_oid, attr)]
         self.log.append((f"unbind port {port_oid}", OK))
+        return status
 
     # ---- strict single-object removal (raise on failure) ---------------
     def remove_entry(self, oid):
-        self.npu.remove(oid)
+        status = self.npu.remove(oid)
         self.entries.remove(oid)
         self.log.append(("remove_entry", OK))
+        return status
 
     def remove_group(self):
         """Remove all group members, then all groups."""
@@ -108,9 +107,10 @@ class AclHelper:
         self.log.append(("remove_group", OK))
 
     def remove_table(self, oid):
-        self.npu.remove(oid)
+        status = self.npu.remove(oid)
         self.tables.remove(oid)
         self.log.append(("remove_table", OK))
+        return status
 
     # ---- lenient full cleanup ------------------------------------------
     def cleanup(self):

@@ -17,14 +17,22 @@ for a in d["exec_args"]: print(a)' "$PROFILE")
 TB=${P[0]}; LOCK=${P[1]}; ARGS=("${P[@]:2}")
 EXEC=(./exec.sh "${ARGS[@]}" --no-tty)
 OUT=poc_$ME/reports/$TARGET-$STAMP
+# Test logs: tests/poc/logplugin.py (in the container tests/poc_$ME/logplugin.py) writes
+# reports/logs/<profile>-<time>/. The container's working directory /sai-challenger/tests is not
+# on sys.path, so PYTHONPATH=/sai-challenger lets -p import it. POC_TESTLOG=0 switches it off.
+PLUGIN=()
+[ -f "$ROOT/tests/poc/logplugin.py" ] && PLUGIN=(-p "tests.poc_$ME.logplugin")
 mkdir -p "$ROOT/tests/poc/reports"
 cd /opt/sai-poc/SAI-Challenger        # exec.sh must run from here
 echo "Waiting for the $TARGET lock..."
 flock /opt/sai-poc/locks/$LOCK.lock "${EXEC[@]}" \
-  env PYTHONDONTWRITEBYTECODE=1 POC_TARGET_PROFILE=$TARGET pytest -p no:cacheprovider \
+  env PYTHONDONTWRITEBYTECODE=1 POC_TARGET_PROFILE=$TARGET POC_TESTLOG=${POC_TESTLOG:-1} \
+  PYTHONPATH=/sai-challenger pytest -p no:cacheprovider "${PLUGIN[@]}" \
   --testbed=$TB -v "$@" \
   --html=$OUT.html --self-contained-html --junitxml=$OUT.xml
 rc=$?
 "${EXEC[@]}" chown -R "$(id -u):$(id -g)" poc_$ME/reports
-echo "report: $ROOT/tests/poc/reports/$TARGET-$STAMP.{html,xml}  exit=$rc"
+# poc_$ME in the container is this clone's tests/poc on the host (RUNBOOK section 4)
+echo "report: tests/$OUT.{html,xml} in the container = $ROOT/tests/poc/reports/$TARGET-$STAMP.{html,xml}  exit=$rc"
+echo "logs:   $ROOT/tests/poc/reports/logs/$TARGET-<MMDD-HHMMSS>/ (newest)"
 exit $rc

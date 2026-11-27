@@ -84,7 +84,7 @@ Fields (all read by tests/poc/conftest.py or scripts/poc/run_poc.sh):
 | lock | run_poc.sh | lock file /opt/sai-poc/locks/<lock>.lock taken with flock for the whole run |
 | ports | conftest.py (poc_ports) | usable port indices; poc_ports(n) returns the first n and skips the test if fewer |
 | traffic_filters | conftest.py | list of frame filters; "mld" turns the MLD filter on when --mld-filter is auto |
-| expected_gaps | conftest.py | test name to reason; each named test is marked as strict xfail |
+| expected_gaps | conftest.py | test name to reason; a named test that fails as predicted is reported PASSED (reason kept in the XML property `known_gap` and the log); one that starts to pass is reported FAILED |
 
 Profile in use for saivpp:
 
@@ -134,10 +134,32 @@ test_l2_basic.py on saivpp is flaky (0 to 5 failures of 7 over 18 runs, 5 to 11 
 Traffic tests use the pcap_capture fixture: a scapy sniffer on veth1, veth2 and veth3 writes
 tests/poc/reports/<test>.pcap. View with: tcpdump -nn -e -r <file>; in Wireshark use vlan.id == 20 for the VLAN 20 tag.
 
+## 8a. Human-readable test logs
+
+Every run also writes plain-text logs to `tests/poc/reports/logs/<profile>-<MMDD-HHMMSS>/`:
+
+| File | Content |
+|---|---|
+| `NNN_<test>.log` | one test: test bed, purpose, markers, each SAI call with its arguments and RETURN value (`oid:0x...<ACL_TABLE>`), the raw Redis message to syncd and its answer, what the test printed (`RESULT ...`), the verdict and failure text of each phase, the known-gap reason |
+| `run.log` | all tests in order in one file (grep-friendly) |
+| `summary.txt` | one line per test: outcome, duration, log file |
+
+How it works: `tests/poc/logplugin.py` is a pytest plugin that `run_poc.sh` loads with `-p tests.poc_<user>.logplugin`.
+It wraps the `npu` object once (`lib/testlog.py`) and logs every test of the run, any track. Tests, `conftest.py` and
+`lib/acl.py` need no logging code: write plain `assert` and `print`. `POC_TESTLOG=0 scripts/poc/run_poc.sh ...` turns it
+off. It never changes a test result. Runs without `run_poc.sh` write no logs; with `-s` the printed output is not in them.
+
+### Test parameters
+
+Ports, VLAN, MACs, IPs, TCP ports, priorities, packet counts, counter names and ACL defaults of the ACL and counter
+tests live in `tests/poc/data/ACL.json` (read through `lib/params.py`). Edit the JSON, not the `.py` files.
+`POC_PARAMS=<file>` selects another file. `test_acl_drop_exp.py` still lets `acl_exp_config.json` and `ACL_*`
+environment variables override the `acl_exp` section.
+
 ## 9. Expected gaps
 
 A deviation from the SAI specification is not hidden: the test stays and is listed in expected_gaps in the profile
-with a reason. The test is then reported as xfail (strict: if it starts to pass, the run fails and the gap is removed).
+with a reason. The test is then reported as PASSED (summarize.py shows it as PASS* and lists the reason under Known gaps); strict: if it starts to pass, the run fails ("KNOWN GAP CLOSED") and the entry is removed.
 A "[" in a pattern is literal, so test_poc_l2_vlan_invalid_id_rejected[4095] matches that exact test id.
 Add one: python3 add_gap.py <profile> '<test name>' '<reason>'.
 

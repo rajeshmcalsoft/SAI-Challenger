@@ -1,61 +1,77 @@
-"""Track C (port counters) Level 1 PoC test.
+"""Track C port counters, Level 1: clear a port's counters; they must read 0.
 
-test_poc_counters_clear_read: clear the counters of one port, read them back,
-expect zero. Creates no SAI objects, so there is nothing to clean up.
-
-Written to the SAI spec; no target checks. If a target does not support a
-counter, SAI says so with a status code and the test skips with that reason.
+Creates no SAI objects. Skips if the target says counters are unsupported.
 """
+
+import os
+import sys
+
 import pytest
+
+# lib/ sits next to this file; make it importable when the file is run alone.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from lib.params import load
 
 pytestmark = [pytest.mark.counters]
 
-STATS = [
-    "SAI_PORT_STAT_IF_IN_OCTETS",
-    "SAI_PORT_STAT_IF_IN_UCAST_PKTS",
-    "SAI_PORT_STAT_IF_OUT_OCTETS",
-    "SAI_PORT_STAT_IF_OUT_UCAST_PKTS",
-]
-RETRIES = 3     # a stray control packet can land between clear and read
+# Values come from data/ACL.json ("counters" -> "clear_read").
+_C = load()["counters"]["clear_read"]
+STATS = _C["stats"]
+RETRIES = _C["retries"]  # Allow for stray control packets between clear and read.
 
 
 @pytest.fixture
-def counter_port(request, npu):
-    """Port from poc_ports when that fixture exists, else the first port."""
-    try:
-        return request.getfixturevalue("poc_ports")[0]
-    except pytest.FixtureLookupError:
-        return npu.port_oids[request.getfixturevalue("poc_ports")(1)[0]]
+def counter_port(npu, poc_ports):
+    """First port of the target profile, returned as a port OID."""
+    idx = poc_ports(1)[0]  # poc_ports is a factory: call it, then index
+    return npu.port_oids[idx]
 
 
 def read_counters(npu, port):
-    """Return {stat_name: int} for STATS."""
+    """Return supported counters as a {stat_name: integer_value} dictionary."""
     data = npu.get_stats(port, STATS)
     values = data.counters() if hasattr(data, "counters") else data
+
     if isinstance(values, dict):
-        # a target may return only the counters it supports
         return {name: int(value) for name, value in values.items()}
+
     return {name: int(value) for name, value in zip(STATS, values)}
 
 
+def is_unsupported(exc):
+    return "NOT_IMPLEMENTED" in str(exc) or "NOT_SUPPORTED" in str(exc)
+
+
+# Clear a port's counters; they must read 0 afterwards.
 def test_poc_counters_clear_read(npu, counter_port):
+    """Verify that clearing supported port counters resets them to zero."""
     try:
         before = read_counters(npu, counter_port)
     except Exception as exc:
-        if "NOT_IMPLEMENTED" in str(exc) or "NOT_SUPPORTED" in str(exc):
-            pytest.skip(f"port counters not supported on this target: {exc}")
+        if is_unsupported(exc):
+            pytest.skip(f"Port counters are not supported on this target: {exc}")
         raise
+
     print(f"RESULT counters before clear: {before}")
+
     if not before:
-        pytest.skip("target returned no port counters")
+        pytest.skip("Target returned no port counters")
 
     after = {}
+
     for attempt in range(1, RETRIES + 1):
-        npu.clear_stats(counter_port, STATS)
-        after = read_counters(npu, counter_port)
+        try:
+            npu.clear_stats(counter_port, STATS)
+            after = read_counters(npu, counter_port)
+        except Exception as exc:
+            if is_unsupported(exc):
+                pytest.skip(f"Port counter operation is unsupported: {exc}")
+            raise
+
         print(f"RESULT counters after clear (try {attempt}): {after}")
+
         if not any(after.values()):
             break
 
-    assert not any(after.values()), f"counters not zero after clear: {after}"
-
+    assert not any(after.values()), f"Port counters were not zero after clear: {after}"

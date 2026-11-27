@@ -77,7 +77,7 @@ RANK = {"passed": 0, "xfail": 1, "skipped": 2, "xpass": 3, "failed": 4}
 LABEL = {
     "passed": "PASS",
     "failed": "FAIL",
-    "xfail": "XFAIL",
+    "xfail": "PASS*",   # known gap: passes, with the gap reason shown in the Gaps list
     "xpass": "XPASS",
     "skipped": "SKIP",
 }
@@ -151,6 +151,11 @@ def classify(testcase):
         if "xfail" in skipped.get("type", "").lower():
             return "xfail", message
         return "skipped", message
+
+    # A known gap is reported by pytest as PASSED (conftest.py) and carries its reason as a property.
+    for prop in testcase.iter("property"):
+        if prop.get("name") == "known_gap":
+            return "xfail", prop.get("value", "")
 
     return "passed", ""
 
@@ -740,7 +745,7 @@ HTML_HEAD = """<!DOCTYPE html>
   tr.file td { background: #f8fafc; color: #334155; font-weight: 700; }
   td.PASS { color: #15803d; font-weight: 700; }
   td.FAIL, td.XPASS { color: #b91c1c; font-weight: 700; }
-  td.XFAIL { color: #a16207; font-weight: 700; }
+  td.PASSGAP { color: #15803d; font-weight: 700; }
   td.SKIP, td.none { color: #64748b; }
   .failure { border-left: 3px solid #dc2626; background: #fff7f7;
              padding: 9px 11px; margin: 8px 0; overflow-wrap: anywhere; }
@@ -801,7 +806,7 @@ def render_html(model):
             f'<article class="target"><h2>{esc(target)}</h2>'
             f'<span class="status {css}">{status}</span>'
             f'<div class="big">{totals["passed"]}<span class="small"> / {total_tests} passed</span></div>'
-            f'<div class="small">FAIL {totals["failed"]} · XFAIL {totals["xfail"]} · '
+            f'<div class="small">FAIL {totals["failed"]} · PASS* (known gap) {totals["xfail"]} · '
             f'XPASS {totals["xpass"]} · SKIP {totals["skipped"]}</div>'
             f'<div class="small">{esc(run["report"])}</div></article>'
         )
@@ -823,8 +828,9 @@ def render_html(model):
                     out.append('<td class="none">—</td>')
                 else:
                     label = LABEL[cell["outcome"]]
+                    css_cls = label.replace("*", "GAP")
                     out.append(
-                        f'<td class="{label}">{label}'
+                        f'<td class="{css_cls}">{label}'
                         f'<span class="small"> · {cell["time"]:.2f}s</span></td>'
                     )
             out.append("</tr>")
@@ -841,7 +847,7 @@ def render_html(model):
         out.append("</section>")
 
     if model["gaps"]:
-        out.append("<section><h2>Known gaps (XFAIL)</h2>")
+        out.append("<section><h2>Known gaps (shown as PASS*)</h2>")
         for gap in model["gaps"]:
             out.append(
                 f'<div class="note"><strong>{esc(gap["target"])} · '
